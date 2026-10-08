@@ -284,3 +284,24 @@ pub fn normalize(path: &Path) -> PathBuf {
         out
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 家目录必须被缩写成 `~`，而侧边栏判断用的是原始路径。
+    ///
+    /// 这条测试钉住的是「展示路径 ≠ 判断路径」这个区分：曾经侧边栏拿缩写过后的
+    /// 字符串去比原始路径，结果只有 /、/tmp、/run/media 会高亮，家目录下的项全失灵。
+    #[test]
+    fn display_path_abbreviates_home() {
+        let home = Path::new("/home/me");
+        assert_eq!(display_path(home, Some(home)), "~");
+        assert_eq!(display_path(Path::new("/home/me/Projects"), Some(home)), "~/Projects");
+        // 家目录之外保持原样
+        assert_eq!(display_path(Path::new("/tmp"), Some(home)), "/tmp");
+        assert_eq!(display_path(Path::new("/"), Some(home)), "/");
+        // 前缀相似但不是子目录，不能被误缩写
+        assert_eq!(display_path(Path::new("/home/melon"), Some(home)), "/home/melon");
+    }
+}

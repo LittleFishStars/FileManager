@@ -340,6 +340,11 @@ export component AppWindow inherits Window {
     in-out property <[Place]> places: [];
     in-out property <[FileEntry]> files: [];
     in-out property <string> current-path: "";
+    // 当前目录的**原始绝对路径**，只用于状态判断，不显示。
+    // 不能用 current-path 判断：它经过展示层缩写（家目录 -> ~），
+    // 而侧边栏并存的是原始路径，两者只在「不经过缩写」的目录上才相等——
+    // 结果就是只有 /、/tmp、/run/media 会被高亮，家目录下的项全部失灵。
+    in-out property <string> current-path-raw: "";
     in-out property <string> status-text: "";
     in-out property <int> selected-index: -1;
     in-out property <bool> can-go-back: false;
@@ -503,7 +508,7 @@ export component AppWindow inherits Window {
 
                     for place in root.places : SideItem {
                         label: place.label;
-                        current: root.current-path == place.path;
+                        current: root.current-path-raw == place.path;
                         clicked => { root.navigate(place.path); }
                     }
 

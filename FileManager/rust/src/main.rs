@@ -316,8 +316,13 @@ impl State {
         let total = visible.len();
         self.model.set_vec(visible);
 
+        // 展示用的路径（家目录缩写成 ~）与状态判断用的原始路径分开设置：
+        // 侧边栏高亮必须比原始路径，否则家目录下的项永远匹配不上。
         self.ui.set_current_path(slint::SharedString::from(
             fm::display_path(&self.cwd, self.home.as_deref()),
+        ));
+        self.ui.set_current_path_raw(slint::SharedString::from(
+            self.cwd.canonicalize().unwrap_or_else(|_| self.cwd.clone()).display().to_string(),
         ));
         self.ui.set_can_go_back(!self.back.is_empty());
         self.ui.set_can_go_forward(!self.forward.is_empty());
@@ -543,9 +548,13 @@ fn build_places(home: Option<&Path>) -> Vec<Place> {
     let mut places = Vec::new();
     let mut push = |label: &str, path: PathBuf| {
         if path.is_dir() {
+            // 存软链解析后的真实路径：读取目录时 `list_dir` 会做 canonicalize，
+            // 当前目录因此总是真实路径；侧边栏这里若保留软链形式（例如某些发行版
+            // 的 /home 是软链、/run/media 也可能被替换），比较就会落空、高亮失灵。
+            let resolved = path.canonicalize().unwrap_or(path);
             places.push(Place {
                 label: slint::SharedString::from(label.to_string()),
-                path: slint::SharedString::from(path.display().to_string()),
+                path: slint::SharedString::from(resolved.display().to_string()),
             });
         }
     };
