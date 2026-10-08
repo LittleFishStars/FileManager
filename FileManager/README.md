@@ -25,24 +25,24 @@ Fluent Design / Material Design 3 风格的 Linux 原生文件管理器，用 **
 ## 构建
 
 ```bash
-# 普通终端
-cd rust && cargo build --release
+# 普通终端（在 MyLinux/ 目录下）
+cargo build --release --manifest-path FileManager/rust/Cargo.toml
 
 # DSH 沙箱会话（~/.local/share/cargo 只读）
-scripts/dev.sh release
+FileManager/scripts/dev.sh release
 ```
 
 > **沙箱下的工具链处理**：DSH 会话里 `~/.local/share/cargo` 与 `~/.local/share/rustup`
 > 都是只读的，rustup 的 shim 一写锁文件就失败。但 `RUSTUP_HOME` 又**不能**指向空目录
 > （rustup 会找不到默认 toolchain 而报 "could not choose a version of cargo"）。
-> 因此 `scripts/dev.sh` 直接调用真实 toolchain 里的 `cargo`，只把 `CARGO_HOME`
-> 重定向到 `rust/.cargo-home/`（纯下载缓存，已在 `.gitignore` 中）。
+> 因此 `FileManager/scripts/dev.sh` 直接调用真实 toolchain 里的 `cargo`，只把 `CARGO_HOME`
+> 重定向到 `FileManager/rust/.cargo-home/`（纯下载缓存，已在 `.gitignore` 中）。
 > 项目里没有 `rust-toolchain.toml`，所以真实 cargo 不会尝试下载 toolchain。
 
 运行：
 
 ```bash
-./rust/target/release/filemanager
+./FileManager/rust/target/release/filemanager
 ```
 
 ## 风格切换
@@ -56,20 +56,20 @@ scripts/dev.sh release
 | `cupertino` / `cosmic` / `qt` / `native` | 其他内置风格 |
 
 ```bash
-SLINT_STYLE=material cargo run --release
-touch rust/build.rs && SLINT_STYLE=material-dark cargo run --release
+SLINT_STYLE=material cargo run --release --manifest-path FileManager/rust/Cargo.toml
+touch FileManager/rust/build.rs && SLINT_STYLE=material-dark cargo run --release --manifest-path FileManager/rust/Cargo.toml
 ```
 
-`build.rs` 声明了 `cargo:rerun-if-env-changed=SLINT_STYLE`，因此改环境变量会自动重编译。
+`FileManager/rust/build.rs` 声明了 `cargo:rerun-if-env-changed=SLINT_STYLE`，改环境变量会自动重编译。
 
-界面里**没有任何硬编码颜色**，全部走 `Palette.*` 与 `Theme.color-scheme`，
+界面里**没有任何硬编码颜色**，全部走 `Palette.*`（包括明暗判断用的 `Palette.color-scheme`），
 所以明暗主题与风格切换不需要改一行界面代码。
 
 单独预览界面（不必反复 `cargo run`）：
 
 ```bash
 cargo install slint-viewer
-SLINT_STYLE=material slint-viewer rust/ui/app.slint
+SLINT_STYLE=material slint-viewer FileManager/rust/ui/app.slint
 ```
 
 ## 性能
@@ -80,11 +80,11 @@ SLINT_STYLE=material slint-viewer rust/ui/app.slint
 
 ```bash
 # 冷启动 + 稳态内存（必须 --repeat 5 取平均，单次无参考价值）
-python3 scripts/measure.py --app-id filemanager --repeat 5 -- ./rust/target/release/filemanager
+python3 FileManager/scripts/measure.py --app-id filemanager --repeat 5 -- ./FileManager/rust/target/release/filemanager
 
 # 渲染器 A/B。显式指定可以避免 GPU 初始化失败时静默回落到软件渲染
-SLINT_BACKEND=winit-femtovg      python3 scripts/measure.py --repeat 5 -- ./rust/target/release/filemanager
-SLINT_BACKEND=winit-femtovg-wgpu python3 scripts/measure.py --repeat 5 -- ./rust/target/release/filemanager
+SLINT_BACKEND=winit-femtovg      python3 FileManager/scripts/measure.py --repeat 5 -- ./FileManager/rust/target/release/filemanager
+SLINT_BACKEND=winit-femtovg-wgpu python3 FileManager/scripts/measure.py --repeat 5 -- ./FileManager/rust/target/release/filemanager
 ```
 
 实测结论：**默认（不设 `SLINT_BACKEND`）就是最快的路径**，走 wgpu/Vulkan；
@@ -100,7 +100,7 @@ SLINT_BACKEND=winit-femtovg-wgpu python3 scripts/measure.py --repeat 5 -- ./rust
 
 ### 调优配置（等基线量完再启用）
 
-`rust/Cargo.toml` 目前是完整默认 feature 链（含软件渲染兜底）。确认渲染稳定后可精简：
+`FileManager/rust/Cargo.toml` 目前是完整默认 feature 链（含软件渲染兜底）。确认渲染稳定后可精简：
 
 ```toml
 slint = { version = "1.18", default-features = false, features = [

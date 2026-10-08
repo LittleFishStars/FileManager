@@ -4,13 +4,13 @@
 
 - 硬件：Intel Alder Lake-P Iris Xe（集显）
 - 合成器：niri（纯 Wayland）
-- 测量脚本：`scripts/measure.py`（启动 = spawn 到 niri 报告窗口出现；内存 = `smaps_rollup` 的 `Pss`）
+- 测量脚本：`FileManager/scripts/measure.py`（启动 = spawn 到 niri 报告窗口出现；内存 = `smaps_rollup` 的 `Pss`）
 - 测量日期：2026-10-08
-- 二进制：`rust/target/release/filemanager`，24 MB（`strip = true` + `lto = "fat"`）
+- 二进制：`FileManager/rust/target/release/filemanager`，24 MB（`strip = true` + `lto = "fat"`）
 
 ## 冷启动与稳态内存
 
-`python3 scripts/measure.py --app-id filemanager --repeat 5 -- ./rust/target/release/filemanager`
+`python3 FileManager/scripts/measure.py --app-id filemanager --repeat 5 -- ./FileManager/rust/target/release/filemanager`
 
 | 指标 | 值 |
 |---|---|

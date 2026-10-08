@@ -28,8 +28,9 @@
 
 **沙箱构建**：DSH 会话里 `~/.local/share/cargo` 与 `~/.local/share/rustup` 只读，
 但 `RUSTUP_HOME` **不能**指向空目录（rustup shim 会报找不到默认 toolchain）。
-正确做法是直接调用真实 toolchain 的 `cargo`，只把 `CARGO_HOME` 重定向到
-`rust/.cargo-home/`（已 gitignore）。`scripts/dev.sh` 已经封装好这件事。
+正确做法是把 `cargo` / `rustc` / `rustdoc` 全部钉到真实 toolchain 二进制，
+只把 `CARGO_HOME` 重定向到 `FileManager/rust/.cargo-home/`（已 gitignore）。
+`FileManager/scripts/dev.sh` 已经封装好这件事。
 
 ## 硬性规则
 
