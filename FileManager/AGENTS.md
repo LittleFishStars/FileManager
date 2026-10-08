@@ -13,9 +13,12 @@
 **不要推荐或迁移到** Tauri、Qt/`cxx-qt`/`qmetaobject-rs`、egui/eframe、iced、Dioxus、makepad、GPUI。
 若 Slint 确实无法满足某个具体需求，**先明确指出来并说明代价**，由用户决定，不要默默换掉。
 
-唯一的备选路径：**`slint` 的 `backend-qt` 后端**，且仅在默认 winit 后端的中文输入法
-在 Wayland 下实测不可用时才启用（本机已装 `qt6-base`/`qt6-declarative`/`qt6-wayland`）。
-**换后端前必须先告诉用户。**
+唯一的备选路径：**`slint` 的 `backend-qt` 后端**（本机已装
+`qt6-base`/`qt6-declarative`/`qt6-wayland`）。**仅在默认 winit 后端的中文输入法
+实测不可用时才启用，且换后端前必须先告诉用户。**
+
+> 现状（2026-10-09 实测）：默认 winit 后端在 niri + fcitx5(rime) 下中文输入**正常**，
+> 所以当前**不需要** `backend-qt`。换渲染器或升 Slint 版本后，记得在搜索框复测。
 
 ## 运行环境
 

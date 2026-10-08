@@ -140,7 +140,9 @@ slint = { version = "1.18", default-features = false, features = [
 - 启动时调用 `slint::set_xdg_app_id("filemanager")`，niri 才能按 app-id 认领窗口。
 - 分数缩放下会打印实际缩放因子到状态栏（`就绪 · 窗口缩放 1.50x` 之类）。
 
-**中文输入法是项目最高风险项**，必须实测：界面上方的搜索框就是验证入口。
+**中文输入法已实测通过**（2026-10-09）：在 niri + fcitx5(rime) 下用默认 winit 后端
+打中文正常，因此**不需要**启用备选的 `backend-qt`。界面上方的搜索框就是验证入口，
+以后换渲染器或升 Slint 版本时可以在这里复测。
 
 ## 项目结构
 
