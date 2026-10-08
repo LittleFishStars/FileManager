@@ -56,16 +56,21 @@ component FileIcon inherits Rectangle {
     in property <color> tint: Palette.foreground;
 
     width: 22px;
-    height: 22px;
     background: transparent;
 
-    Image {
-        source: root.source;
-        width: 22px;
-        height: 22px;
-        image-fit: contain;
-        // 单色图标（Tabler）按当前前景色重新上色；多色图标保持原样。
-        colorize: root.mono ? root.tint : transparent;
+    // 关键：布局在交叉轴上会把子元素拉伸到整行高（36px），
+    // 光给 Image 设 height: 22px 没用——图标会贴在行顶部。
+    // 放进一个 alignment:center 的 VerticalLayout 才会真正垂直居中。
+    VerticalLayout {
+        alignment: center;
+        Image {
+            source: root.source;
+            width: 22px;
+            height: 22px;
+            image-fit: contain;
+            // 单色图标（Tabler）按当前前景色重新上色；多色图标保持原样。
+            colorize: root.mono ? root.tint : transparent;
+        }
     }
 }
 
@@ -177,13 +182,17 @@ component SideItem inherits Rectangle {
         padding-left: 12px;
         spacing: 9px;
 
-        // 侧边栏也用 Tabler 的文件夹图标，和工具栏同一套视觉语言
-        Image {
-            source: @image-url("../icons/tabler/folder.svg");
-            colorize: current ? Palette.selection-foreground : Palette.foreground;
-            width: 18px;
-            height: 18px;
-            image-fit: contain;
+        // 侧边栏也用 Tabler 的文件夹图标，和工具栏同一套视觉语言。
+        // 同样需要 alignment:center：否则 34px 的行里 18px 图标会贴在顶部。
+        VerticalLayout {
+            alignment: center;
+            Image {
+                source: @image-url("../icons/tabler/folder.svg");
+                colorize: current ? Palette.selection-foreground : Palette.foreground;
+                width: 18px;
+                height: 18px;
+                image-fit: contain;
+            }
         }
         Text {
             text: label;
