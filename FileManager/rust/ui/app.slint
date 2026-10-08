@@ -131,9 +131,9 @@ component FileRow inherits Rectangle {
     animate background { duration: 90ms; easing: ease-out; }
 
     HorizontalLayout {
-        padding-left: 10px;
-        padding-right: 10px;
-        spacing: 10px;
+        padding-left: 12px;
+        padding-right: 12px;
+        spacing: 12px;
 
         FileIcon {
             kind: item.icon-kind;
@@ -244,7 +244,7 @@ component SideItem inherits Rectangle {
 // 注意 `transform-rotation` 是 Transform 元素的属性，不能直接写在 Rectangle 上。
 // ---------------------------------------------------------------------------
 
-/// 一个朝向某个方向的三角形。
+/// 一个朝向某个方向的三角形。只用在小尺寸的「排序方向」指示上。
 ///
 /// 为什么用 Path 而不是旋转 Rectangle：Slint 1.18 的 Rectangle **不支持旋转**
 /// （`transform-rotation` 只属于内部的 Transform 类型，`rotation-angle` 是它已废弃的别名）。
@@ -265,89 +265,34 @@ component AngleTri inherits Path {
             : "M 0 0 L " + (root.side / 1px) + " " + (root.side / 2px) + " L 0 " + (root.side / 1px) + " Z";
 }
 
-/// 方向箭头。`dir`：0 左 1 右 2 上 3 下。
-component PointArrow inherits Rectangle {
-    in property <int> dir: 0;
-    in property <color> tint: Palette.foreground;
-
-    width: 22px;
-    height: 22px;
-    background: transparent;
-
-    // 箭杆：一根横/竖条（比箭头窄一点，视觉上更像箭头）
-    Rectangle {
-        width: root.dir <= 1 ? 9px : 3px;
-        height: root.dir <= 1 ? 3px : 9px;
-        x: root.dir == 0 ? 0px : (root.dir == 1 ? 13px : 9.5px);
-        y: root.dir == 0 ? 9.5px : (root.dir == 1 ? 9.5px : (root.dir == 2 ? 0px : 13px));
-        border-radius: 1.5px;
-        background: root.tint;
-    }
-    // 箭头尖
-    AngleTri {
-        side: 13px;
-        tint: root.tint;
-        dir: root.dir == 2 ? 0 : (root.dir == 3 ? 1 : (root.dir == 0 ? 2 : 3));
-        x: root.dir == 0 ? 0px : (root.dir == 1 ? 9px : 4.5px);
-        y: root.dir == 2 ? 0px : (root.dir == 3 ? 9px : 4.5px);
-    }
-}
-
-/// 纯图标按钮。
-component GlyphButton inherits Rectangle {
-    in property <int> dir: 0;
-    in property <bool> enabled: true;
-    in property <bool> hovered: false;
-
-    callback clicked();
-
-    width: 34px;
-    height: 32px;
-    border-radius: 5px;
-    background: hovered && enabled ? Palette.alternate-background : transparent;
-    animate background { duration: 90ms; easing: ease-out; }
-
-    PointArrow {
-        dir: dir;
-        tint: Palette.foreground;
-        x: (parent.width - self.width) / 2;
-        y: (parent.height - self.height) / 2;
-    }
-
-    // 禁用态用一个覆盖层压淡，比逐个改子元素颜色简单
-    Rectangle {
-        background: Palette.background;
-        opacity: enabled ? 0.0 : 0.55;
-        border-radius: parent.border-radius;
-        animate opacity { duration: 120ms; easing: ease-out; }
-    }
-
-    TouchArea {
-        mouse-cursor: pointer;
-        clicked => { if (root.enabled) { root.clicked(); } }
-    }
-}
-
+// 关于导航图标的一个决定：这里本来用几何图形画 ←→↑ 箭头，实测做不好——
+// Slint 的 Rectangle 不能旋转，折线箭头只能用矩形拼，拼出来的形状在小尺寸下
+// 又钝又难辨认（还出现过方向反了的问题）。所以工具栏统一改回**文字按钮**：
+// 中文标签在任何字体下都清晰，也不用为了一个图标引入图标字体。
 /// 文字按钮：用于「刷新」「新建」这类动作。
 /// 中文标签比找不到合适字形的符号可靠，也不用为了一个图标引入图标字体。
 component TextButton inherits Rectangle {
     in property <string> label;
     in property <bool> active: false;
+    in property <bool> enabled: true;
     in property <bool> hovered: false;
 
     callback clicked();
 
-    // Slint 没有取字符串渲染宽度的 API（没有 measure），所以用固定宽度；
-    // 中文标签很短，固定宽度够用。
-    width: 88px;
-    height: 30px;
+    // Slint 没有取字符串渲染宽度的 API（没有 measure），所以用固定宽度。
+    // 两个汉字在 12.5px 字号下约 25px，留 18px 左右内边距即 62px；
+    // 按钮太宽会让文字陷在一个大空框里，视觉上反而更挤。
+    width: 62px;
+    height: 34px;
     border-radius: 5px;
-    background: hovered ? Palette.alternate-background : (active ? Palette.selection-background : transparent);
+    background: hovered && enabled ? Palette.alternate-background
+              : (active ? Palette.selection-background : transparent);
     animate background { duration: 90ms; easing: ease-out; }
 
     Text {
         text: label;
         color: active ? Palette.selection-foreground : Palette.foreground;
+        opacity: enabled ? 1.0 : 0.35;
         font-size: 12.5px;
         horizontal-alignment: center;
         vertical-alignment: center;
@@ -355,7 +300,7 @@ component TextButton inherits Rectangle {
 
     TouchArea {
         mouse-cursor: pointer;
-        clicked => { root.clicked(); }
+        clicked => { if (root.enabled) { root.clicked(); } }
     }
 }
 
@@ -456,24 +401,33 @@ export component AppWindow inherits Window {
 
     background: Palette.background;
 
+    // 窗口整体内缩一圈。
+    // niri 不提供服务端窗口装饰，所以内容会直接顶到窗口边缘：最上面的按钮贴着屏幕
+    // 上沿、分隔线压到左右边缘，观感就是「四周太挤、像被裁掉」。这里给根布局统一
+    // 留出外边距，窗口底色仍然铺满整个窗口，所以内缩区看起来只是一圈背景。
     VerticalLayout {
+        padding: 10px;
         spacing: 0px;
 
         // -------------------------------------------------------------------
         // 顶栏：导航按钮 + 地址栏 + 新建/隐藏/排序
         // -------------------------------------------------------------------
         Rectangle {
-            height: 46px;
+            height: 56px;
             background: Palette.background;
 
             HorizontalLayout {
-                padding-left: 8px;
-                padding-right: 8px;
-                spacing: 4px;
+                // 顶栏四周都要留出余量：之前左右各 10px、按钮间距 4px，
+                // 四个按钮挤成一串，紧贴窗口上沿和左沿，观感就是「贴到一起」。
+                padding-left: 16px;
+                padding-right: 16px;
+                padding-top: 8px;
+                padding-bottom: 8px;
+                spacing: 10px;
 
-                GlyphButton { dir: 0; enabled: root.can-go-back; clicked => { root.go-back(); } }
-                GlyphButton { dir: 1; enabled: root.can-go-forward; clicked => { root.go-forward(); } }
-                GlyphButton { dir: 2; enabled: root.can-go-up; clicked => { root.go-up(); } }
+                TextButton { label: "后退"; enabled: root.can-go-back; clicked => { root.go-back(); } }
+                TextButton { label: "前进"; enabled: root.can-go-forward; clicked => { root.go-forward(); } }
+                TextButton { label: "上级"; enabled: root.can-go-up; clicked => { root.go-up(); } }
                 TextButton { label: "刷新"; clicked => { root.refresh(); } }
 
                 Rectangle { width: 8px; background: transparent; }
@@ -532,14 +486,19 @@ export component AppWindow inherits Window {
                 background: Palette.background;
 
                 VerticalLayout {
-                    padding: 8px;
+                    // 侧边栏内边距比正文大一档：窗口左沿到内容距离太小时，
+                    // 首行的图标看着像贴在边框上。
+                    padding-left: 10px;
+                    padding-right: 10px;
+                    padding-top: 10px;
+                    padding-bottom: 10px;
                     spacing: 2px;
 
                     // 应用标识：九个点组成的矩阵，纯几何，不依赖图片或字体
                     HorizontalLayout {
-                        height: 40px;
-                        padding-left: 6px;
-                        spacing: 10px;
+                        height: 44px;
+                        padding-left: 4px;
+                        spacing: 12px;
                         Rectangle {
                             width: 26px;
                             height: 26px;
@@ -626,7 +585,7 @@ export component AppWindow inherits Window {
                     background: Palette.background;
 
                     HorizontalLayout {
-                        padding-left: 52px;   // FileRow: 10 内边距 + 22 图标 + 10 间距 + 10 行内边距 = 52
+                        padding-left: 46px;   // FileRow: 12 行内边距 + 22 图标 + 12 间距 = 46
                         padding-right: 10px;
                         spacing: 10px;
 
