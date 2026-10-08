@@ -74,8 +74,8 @@ SLINT_STYLE=material slint-viewer FileManager/rust/ui/app.slint
 
 ## 性能
 
-当前基线（release，niri/Wayland）：**冷启动平均 151 ms，稳态 Pss 36.2 MiB，
-静止 50 秒 CPU 增量为 0**。完整数据见 [`docs/performance.md`](docs/performance.md)。
+当前基线（release，niri/Wayland）：**冷启动 150 ms 量级，稳态 Pss 36–38 MiB，
+静止 50 秒 CPU 增量为 0**。完整数据与「跨会话不可比」的说明见 [`docs/performance.md`](docs/performance.md)。
 **所有性能结论必须来自 release 构建。**
 
 ```bash
