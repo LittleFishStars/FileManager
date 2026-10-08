@@ -1,0 +1,615 @@
+// 文件管理器界面。
+//
+// 硬性约束（见项目 AGENTS.md）：
+//   * 颜色一律走 Palette / Theme 全局，不硬编码色值，否则明暗与风格切换失效。
+//   * 动画只用 animate（编译成渲染线程上的时间线，静止即零重绘）；禁止 Timer 插值。
+//   * 不使用 width / height 的动画，只动 opacity 与颜色，避免每帧重新布局。
+
+// 注意两件事：
+//   * 明暗主题的判断走 `Palette.color-scheme`，Slint 没有 Theme 全局。
+//   * ListView 来自 std-widgets，不是内置元素。
+import { Button, LineEdit, ListView, Palette } from "std-widgets.slint";
+
+// ---------------------------------------------------------------------------
+// 与 Rust 侧共享的数据类型
+// ---------------------------------------------------------------------------
+
+/// 文件列表的一行。字段由 Rust 侧填充，`.slint` 只读。
+export struct FileEntry {
+    name: string,
+    path: string,
+    is-dir: bool,
+    size-text: string,
+    modified-text: string,
+    icon-kind: int,        // 与 filemodel::kind_of 的返回值对应：0 文件夹 1 图片 2 音频 3 视频 4 压缩包 5 代码 6 文档 7 文本 8 其他
+    type-text: string,
+    hidden: bool,
+}
+
+/// 侧边栏的一项。
+export struct Place {
+    label: string,
+    path: string,
+}
+
+// ---------------------------------------------------------------------------
+// 图标
+//
+// 有意不用 Path 也不引入图标字体：Path 的 commands 不走 width/height 缩放，
+// 而图标字体在多发行版上随时可能缺失。改用「圆角色块 + 字首字母」，
+// 颜色全部来自 Palette，任何风格与明暗主题下都能正确跟随。
+// ---------------------------------------------------------------------------
+
+/// 文件夹：底板 + 左上角标签，用分层透明度做出 Fluent 的层次感。
+component FolderGlyph inherits Rectangle {
+    in property <color> tint: Palette.foreground;
+
+    width: 22px;
+    height: 22px;
+    background: transparent;
+
+    // 顶部标签
+    Rectangle {
+        x: 1px;
+        y: 3px;
+        width: 9px;
+        height: 4px;
+        border-radius: 1.5px;
+        background: tint;
+        opacity: 0.55;
+    }
+    // 主体
+    Rectangle {
+        x: 1px;
+        y: 6px;
+        width: 20px;
+        height: 13px;
+        border-radius: 3px;
+        background: tint;
+        opacity: 0.85;
+    }
+}
+
+/// 字首缩写：每个类型一个字母，用一个淡色圆角块承载。
+/// `icon-kind` 的取值与 Rust 侧 `filemodel::kind_of` 对应。
+component IconBadge inherits Rectangle {
+    in property <int> kind: 8;
+    in property <color> tint: Palette.foreground;
+
+    width: 22px;
+    height: 22px;
+    border-radius: 5px;
+    // 淡色底：直接把 tint 压低透明度，天然跟随深浅主题
+    background: tint;
+    opacity: 0.16;
+
+    // 注意：父级设了 opacity，子级颜色会一并变淡，所以这里用不透明色即可
+    Text {
+        text: kind == 1 ? "I"
+            : kind == 2 ? "A"
+            : kind == 3 ? "V"
+            : kind == 4 ? "Z"
+            : kind == 5 ? "C"
+            : kind == 6 ? "D"
+            : kind == 7 ? "T"
+            : kind == 8 ? "·"
+            : "F";
+        color: Palette.foreground;
+        font-size: 12px;
+        font-weight: 600;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+}
+
+/// 文件类型图标：文件夹仍然用真实文件夹造型（最高频识别对象），
+/// 其余类型统一走字首色块。
+component FileIcon inherits Rectangle {
+    in property <int> kind: 0;
+    in property <color> tint: Palette.foreground;
+
+    width: 22px;
+    height: 22px;
+    background: transparent;
+
+    if kind == 0 : FolderGlyph { tint: tint; }
+    if kind != 0 : IconBadge { kind: kind; tint: tint; }
+}
+
+// ---------------------------------------------------------------------------
+// 列表行
+// ---------------------------------------------------------------------------
+
+component FileRow inherits Rectangle {
+    in property <FileEntry> item;
+    in property <bool> selected: false;
+    in property <bool> hovered: false;
+
+    callback clicked();
+    callback activated();
+
+    height: 36px;
+    border-radius: 5px;
+    // 选中 / 悬停 / 常态三档底色，全部来自 Palette
+    background: selected
+        ? Palette.selection-background
+        : (hovered ? Palette.alternate-background : transparent);
+    animate background { duration: 90ms; easing: ease-out; }
+
+    HorizontalLayout {
+        padding-left: 10px;
+        padding-right: 10px;
+        spacing: 10px;
+
+        FileIcon {
+            kind: item.icon-kind;
+            tint: Palette.foreground;
+            // 垂直对齐由外层布局自己处理，自定义组件没有 vertical-alignment
+        }
+
+        // 文件名：占满剩余宽度，过长省略
+        Text {
+            text: item.name;
+            color: selected ? Palette.selection-foreground : Palette.foreground;
+            font-size: 13px;
+            vertical-alignment: center;
+            overflow: elide;
+            horizontal-stretch: 1;
+            min-width: 0px;
+        }
+
+        Text {
+            text: item.type-text;
+            color: Palette.foreground;
+            opacity: 0.6;
+            font-size: 11.5px;
+            width: 110px;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+
+        Text {
+            text: item.size-text;
+            color: Palette.foreground;
+            opacity: 0.7;
+            font-size: 11.5px;
+            width: 74px;
+            horizontal-alignment: right;
+            vertical-alignment: center;
+        }
+
+        Text {
+            text: item.modified-text;
+            color: Palette.foreground;
+            opacity: 0.7;
+            font-size: 11.5px;
+            width: 116px;
+            horizontal-alignment: right;
+            vertical-alignment: center;
+        }
+    }
+
+    // 悬停高亮：用一个叠层而不是改背景色，这样不会与"选中"态打架
+    Rectangle {
+        background: Palette.foreground;
+        opacity: hovered && !selected ? 0.03 : 0.0;
+        border-radius: parent.border-radius;
+        animate opacity { duration: 90ms; easing: ease-out; }
+    }
+
+    TouchArea {
+        clicked => { root.clicked(); }
+        double-clicked => { root.activated(); }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 侧边栏入口
+// ---------------------------------------------------------------------------
+
+component SideItem inherits Rectangle {
+    in property <string> label;
+    in property <bool> current: false;
+    in property <bool> hovered: false;
+
+    callback clicked();
+
+    height: 34px;
+    border-radius: 5px;
+    background: current
+        ? Palette.selection-background
+        : (hovered ? Palette.alternate-background : transparent);
+    animate background { duration: 90ms; easing: ease-out; }
+
+    HorizontalLayout {
+        padding-left: 12px;
+        spacing: 9px;
+
+        FolderGlyph {
+            tint: current ? Palette.selection-foreground : Palette.foreground;
+            width: 17px;
+            height: 17px;
+        }
+        Text {
+            text: label;
+            color: current ? Palette.selection-foreground : Palette.foreground;
+            font-size: 13px;
+            vertical-alignment: center;
+        }
+    }
+
+    TouchArea {
+        clicked => { root.clicked(); }
+    }
+}
+
+/// 轻量工具按钮：只在悬停时出现底色，符合 Fluent 的"安静工具栏"做法。
+component ToolButton inherits Rectangle {
+    in property <string> label;
+    in property <bool> enabled: true;
+    in property <bool> hovered: false;
+
+    callback clicked();
+
+    min-width: 28px;
+    height: 28px;
+    border-radius: 5px;
+    background: hovered && enabled ? Palette.alternate-background : transparent;
+    animate background { duration: 90ms; easing: ease-out; }
+
+    Text {
+        text: label;
+        color: Palette.foreground;
+        opacity: enabled ? 1.0 : 0.35;
+        font-size: 14px;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+
+    TouchArea {
+        clicked => { if (root.enabled) { root.clicked(); } }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 主窗口
+// ---------------------------------------------------------------------------
+/// 表头单元格：所有列头共用，样式集中在一处。
+component HeaderCell inherits Text {
+    color: Palette.foreground;
+    opacity: 0.6;
+    font-size: 11px;
+    vertical-alignment: center;
+    overflow: elide;
+}
+
+/// 排序切换按钮：点一次切字段，再点同字段切升降序。
+/// 箭头方向由 `descending` 决定，激活态由 `active` 决定。
+component SortChip inherits Rectangle {
+    in property <string> label;
+    in property <bool> active: false;
+    in property <bool> descending: false;
+    in property <bool> hovered: false;
+
+    callback clicked();
+
+    width: 44px;
+    height: 20px;
+    border-radius: 4px;
+    background: active ? Palette.selection-background
+                       : (hovered ? Palette.alternate-background : transparent);
+    animate background { duration: 90ms; easing: ease-out; }
+
+    Text {
+        text: active ? (label + (descending ? "▾" : "▴")) : label;
+        color: active ? Palette.selection-foreground : Palette.foreground;
+        opacity: active ? 1.0 : 0.6;
+        font-size: 11px;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+
+    TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+}
+
+export component AppWindow inherits Window {
+    title: "文件管理器";
+    preferred-width: 1040px;
+    preferred-height: 660px;
+    min-width: 520px;
+    min-height: 380px;
+
+    // 由 Rust 侧在启动时填入
+    in-out property <[Place]> places: [];
+    in-out property <[FileEntry]> files: [];
+    in-out property <string> current-path: "";
+    in-out property <string> status-text: "";
+    in-out property <int> selected-index: -1;
+    in-out property <bool> can-go-back: false;
+    in-out property <bool> can-go-forward: false;
+    in-out property <bool> can-go-up: false;
+    in-out property <bool> show-hidden: false;
+    in-out property <int> sort-mode: 0;      // 0 名称 1 大小 2 修改时间 3 类型
+    in-out property <bool> sort-descending: false;
+    in-out property <string> search-query: "";
+    in-out property <string> rename-value: "";
+
+    callback navigate(string);
+    callback go-back();
+    callback go-forward();
+    callback go-up();
+    callback refresh();
+    callback toggle-hidden();
+    callback set-sort(int, bool);
+    callback open-selected();
+    callback open-external(string);
+    callback search-edited(string);
+    callback rename-selected(string);
+    callback delete-selected();
+    callback create-folder();
+
+    background: Palette.background;
+
+    VerticalLayout {
+        spacing: 0px;
+
+        // -------------------------------------------------------------------
+        // 顶栏：导航按钮 + 地址栏 + 新建/隐藏/排序
+        // -------------------------------------------------------------------
+        Rectangle {
+            height: 46px;
+            background: Palette.background;
+
+            HorizontalLayout {
+                padding-left: 8px;
+                padding-right: 8px;
+                spacing: 2px;
+
+                ToolButton { label: "←"; enabled: root.can-go-back; clicked => { root.go-back(); } }
+                ToolButton { label: "→"; enabled: root.can-go-forward; clicked => { root.go-forward(); } }
+                ToolButton { label: "↑"; enabled: root.can-go-up; clicked => { root.go-up(); } }
+                ToolButton { label: "⟳"; clicked => { root.refresh(); } }
+
+                Rectangle { width: 6px; background: transparent; }
+
+                // 地址栏：只读展示，点击行为留待以后做成可编辑面包屑
+                Rectangle {
+                    horizontal-stretch: 1;
+                    height: 30px;
+                    border-radius: 5px;
+                    background: Palette.alternate-background;
+                    border-width: 1px;
+                    border-color: Palette.border;
+
+                    HorizontalLayout {
+                        padding-left: 10px;
+                        padding-right: 10px;
+                        spacing: 6px;
+                        FolderGlyph { tint: Palette.foreground; width: 15px; height: 15px; }
+                        Text {
+                            text: root.current-path;
+                            color: Palette.foreground;
+                            font-size: 12.5px;
+                            vertical-alignment: center;
+                            overflow: elide;
+                            horizontal-stretch: 1;
+                            min-width: 0px;
+                        }
+                    }
+                }
+
+                ToolButton {
+                    label: root.show-hidden ? "◉" : "◎";
+                    clicked => { root.toggle-hidden(); }
+                }
+                ToolButton { label: "+"; clicked => { root.create-folder(); } }
+            }
+        }
+
+        // 分隔线：用 Palette.border，深浅主题自动跟随
+        Rectangle { height: 1px; background: Palette.border; }
+
+        // -------------------------------------------------------------------
+        // 主体：侧边栏 + 文件列表
+        // -------------------------------------------------------------------
+        HorizontalLayout {
+            spacing: 0px;
+            vertical-stretch: 1;
+
+            // 侧边栏
+            Rectangle {
+                width: 186px;
+                background: Palette.background;
+
+                VerticalLayout {
+                    padding: 8px;
+                    spacing: 2px;
+
+                    // 应用标识：九个点组成的矩阵，纯几何，不依赖图片或字体
+                    HorizontalLayout {
+                        height: 40px;
+                        padding-left: 6px;
+                        spacing: 10px;
+                        Rectangle {
+                            width: 26px;
+                            height: 26px;
+                            border-radius: 6px;
+                            background: Palette.accent-background;
+                            // Slint 的 for 不能嵌套，所以九个点显式写出来。
+                            // 全部用 Palette.accent-foreground，硬编码的只有几何位置。
+                            for col[j] in 3 : Rectangle { x: 6px + j * 5px; y: 6px;  width: 3.5px; height: 3.5px; border-radius: 1.75px; background: Palette.accent-foreground; }
+                            for col[j] in 3 : Rectangle { x: 6px + j * 5px; y: 11px; width: 3.5px; height: 3.5px; border-radius: 1.75px; background: Palette.accent-foreground; }
+                            for col[j] in 3 : Rectangle { x: 6px + j * 5px; y: 16px; width: 3.5px; height: 3.5px; border-radius: 1.75px; background: Palette.accent-foreground; }
+                        }
+                        Text {
+                            text: "文件管理器";
+                            color: Palette.foreground;
+                            font-size: 13.5px;
+                            font-weight: 600;
+                            vertical-alignment: center;
+                        }
+                    }
+
+                    for place in root.places : SideItem {
+                        label: place.label;
+                        current: root.current-path == place.path;
+                        clicked => { root.navigate(place.path); }
+                    }
+
+                    Rectangle { vertical-stretch: 1; background: transparent; }
+
+                    Text {
+                        text: root.show-hidden ? "已显示隐藏项" : "隐藏项已过滤";
+                        color: Palette.foreground;
+                        opacity: 0.45;
+                        font-size: 11px;
+                        horizontal-alignment: left;
+                    }
+                }
+            }
+
+            Rectangle { width: 1px; background: Palette.border; }
+
+            // 右侧：搜索 + 表头 + 列表
+            VerticalLayout {
+                spacing: 0px;
+                horizontal-stretch: 1;
+
+                Rectangle {
+                    height: 42px;
+                    background: Palette.background;
+
+                    HorizontalLayout {
+                        padding-left: 10px;
+                        padding-right: 10px;
+                        spacing: 8px;
+
+                        // 这个输入框同时承担两件事：搜索，以及**中文输入法的实测入口**
+                        LineEdit {
+                            placeholder-text: "搜索当前目录（也可在此实测中文输入法）";
+                            text <=> root.search-query;
+                            edited => { root.search-edited(self.text); }
+                            horizontal-stretch: 1;
+                        }
+
+                        // 重命名：选中一行后在此输入新名字并回车
+                        LineEdit {
+                            placeholder-text: "重命名";
+                            text <=> root.rename-value;
+                            width: 170px;
+                            accepted => {
+                                root.rename-selected(self.text);
+                                self.text = "";
+                            }
+                        }
+
+                        Button {
+                            text: "删除";
+                            clicked => { root.delete-selected(); }
+                        }
+                    }
+                }
+
+                // 表头
+                Rectangle {
+                    height: 28px;
+                    background: Palette.background;
+
+                    HorizontalLayout {
+                        padding-left: 42px;   // 让开图标列
+                        padding-right: 10px;
+                        spacing: 10px;
+
+
+                        HeaderCell { text: "名称"; horizontal-stretch: 1; min-width: 0px; }
+                        HeaderCell { text: "类型"; width: 110px; }
+                        HeaderCell { text: "大小"; width: 74px; horizontal-alignment: right; }
+                        HeaderCell { text: "修改时间"; width: 116px; horizontal-alignment: right; }
+
+                        // 排序切换：点一次切换字段，再点同字段切换升降序
+
+                        SortChip { label: "名称"; active: sort-mode == 0; descending: sort-descending; clicked => { root.set-sort(0, !(sort-mode == 0 && !sort-descending)); } }
+                        SortChip { label: "大小"; active: sort-mode == 1; descending: sort-descending; clicked => { root.set-sort(1, !(sort-mode == 1 && !sort-descending)); } }
+                        SortChip { label: "时间"; active: sort-mode == 2; descending: sort-descending; clicked => { root.set-sort(2, !(sort-mode == 2 && !sort-descending)); } }
+                        SortChip { label: "类型"; active: sort-mode == 3; descending: sort-descending; clicked => { root.set-sort(3, !(sort-mode == 3 && !sort-descending)); } }
+                    }
+                }
+
+                Rectangle { height: 1px; background: Palette.border; }
+
+                // 文件列表：ListView 只实例化可见行的 delegate
+                Rectangle {
+                    vertical-stretch: 1;
+                    background: Palette.background;
+
+                    if root.files.length == 0 : Text {
+                        text: root.status-text == "" ? "空目录" : root.status-text;
+                        color: Palette.foreground;
+                        opacity: 0.5;
+                        font-size: 13px;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+
+                    ListView {
+                        y: 4px;
+                        height: parent.height - 8px;
+                        width: parent.width;
+                        for item[index] in root.files : FileRow {
+                            item: item;
+                            selected: index == root.selected-index;
+                            clicked => { root.selected-index = index; }
+                            activated => { root.selected-index = index; root.open-selected(); }
+                        }
+                    }
+                }
+            }
+        }
+
+        Rectangle { height: 1px; background: Palette.border; }
+
+        // -------------------------------------------------------------------
+        // 状态栏
+        // -------------------------------------------------------------------
+        Rectangle {
+            height: 30px;
+            background: Palette.background;
+
+            HorizontalLayout {
+                padding-left: 12px;
+                padding-right: 12px;
+                spacing: 12px;
+
+                Text {
+                    text: root.status-text;
+                    color: Palette.foreground;
+                    opacity: 0.65;
+                    font-size: 11.5px;
+                    vertical-alignment: center;
+                    horizontal-stretch: 1;
+                    min-width: 0px;
+                    overflow: elide;
+                }
+
+                // 明确标出当前风格，避免"以为在测 Material 其实跑的是 Fluent"
+                Text {
+                    text: Palette.color-scheme == ColorScheme.dark
+                        ? "风格: " + BuiltinStyle.name + " · 深色"
+                        : "风格: " + BuiltinStyle.name + " · 浅色";
+                    color: Palette.foreground;
+                    opacity: 0.45;
+                    font-size: 11px;
+                    vertical-alignment: center;
+                }
+            }
+        }
+    }
+}
+
+/// 只用于状态栏显示编译期烘焙进来的风格名与明暗。
+export global BuiltinStyle {
+    out property <string> name: "unknown";
+}

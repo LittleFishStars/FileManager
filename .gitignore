@@ -1,0 +1,18 @@
+# Rust 构建产物
+/rust/target/
+
+# DSH 沙箱下 ~/.local/share/cargo 是只读的，因此依赖与索引缓存重定向到工作区内。
+# 这是纯缓存，不入库。
+/rust/.cargo-home/
+
+# 构建日志与临时产物
+*.log
+build-*.log
+*-err.log
+__pycache__/
+*.pyc
+
+# 编辑器
+.vscode/
+.idea/
+*.swp

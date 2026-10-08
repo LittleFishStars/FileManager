@@ -1,0 +1,24 @@
+[package]
+name = "filemanager"
+version = "0.1.0"
+edition = "2024"
+description = "Fluent / Material Design 3 风格的 Linux 原生文件管理器（Rust + Slint）"
+license = "GPL-3.0-only"
+publish = false
+
+[dependencies]
+# 起步配置：完整默认 feature 链（winit 后备 + femtovg 渲染器 + 软件渲染兜底）。
+# 先跑通、量出基线，再按 README「调优配置」一节换成 default-features = false 的精简链。
+slint = { version = "1.18", features = ["renderer-femtovg-wgpu"] }
+
+[build-dependencies]
+slint-build = "1.18"
+
+# Slint 的 debug 构建带额外运行时检查，性能与 release 差距很大，故抬到 1。
+[profile.dev]
+opt-level = 1
+
+[profile.release]
+lto = "fat"
+codegen-units = 1
+strip = true
