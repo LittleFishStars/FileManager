@@ -21,7 +21,12 @@ export struct FileEntry {
     is-dir: bool,
     size-text: string,
     modified-text: string,
-    icon-kind: int,        // 与 filemodel::kind_of 的返回值对应：0 文件夹 1 图片 2 音频 3 视频 4 压缩包 5 代码 6 文档 7 文本 8 其他
+    // 图标由 Rust 侧按扩展名/目录名从 Material Icon Theme 里选好后填进来，
+    // 未收录的类型回退到通用文档图标。
+    icon: image,
+    // 该图标是否是单色图标（Tabler 那批）。单色的用 colorize 跟随主题色；
+    // Material 的多色图标不能 colorize，否则会被压成一个色块。
+    icon-mono: bool,
     type-text: string,
     // 斑马纹标记：由 Rust 侧按行号填充。
     alt: bool,
@@ -41,73 +46,27 @@ export struct Place {
 // 颜色全部来自 Palette，任何风格与明暗主题下都能正确跟随。
 // ---------------------------------------------------------------------------
 
-/// 文件夹：底板 + 左上角标签，用分层透明度做出 Fluent 的层次感。
-component FolderGlyph inherits Rectangle {
-    in property <color> tint: Palette.foreground;
-
-    width: 22px;
-    height: 22px;
-    background: transparent;
-
-    // 顶部标签
-    Rectangle {
-        x: 1px;
-        y: 3px;
-        width: 9px;
-        height: 4px;
-        border-radius: 1.5px;
-        background: tint;
-        opacity: 0.55;
-    }
-    // 主体
-    Rectangle {
-        x: 1px;
-        y: 6px;
-        width: 20px;
-        height: 13px;
-        border-radius: 3px;
-        background: tint;
-        opacity: 0.85;
-    }
-}
-
-/// 字首缩写：每个类型一个字母，用一个淡色圆角块承载。
-/// `icon-kind` 的取值与 Rust 侧 `filemodel::kind_of` 对应。
-component IconBadge inherits Rectangle {
-    in property <int> kind: 8;
-    in property <color> tint: Palette.foreground;
-
-    width: 22px;
-    height: 22px;
-    border-radius: 5px;
-    // 淡色底：直接把 tint 压低透明度，天然跟随深浅主题
-    background: tint;
-    opacity: 0.16;
-
-    // 注意：父级设了 opacity，子级颜色会一并变淡，所以这里用不透明色即可
-    Text {
-        // Slint 的三元运算符必须整条写在同一行，拆行会解析失败。
-        text: kind == 1 ? "I" : kind == 2 ? "A" : kind == 3 ? "V" : kind == 4 ? "Z" : kind == 5 ? "C" : kind == 6 ? "D" : kind == 7 ? "T" : kind == 8 ? "·" : "F";
-        color: Palette.foreground;
-        font-size: 12px;
-        font-weight: 600;
-        horizontal-alignment: center;
-        vertical-alignment: center;
-    }
-}
-
-/// 文件类型图标：文件夹仍然用真实文件夹造型（最高频识别对象），
-/// 其余类型统一走字首色块。
+/// 列表行的文件/文件夹图标。
+///
+/// 图标本身（SVG 字节）在 Rust 侧按扩展名/目录名选好后通过 `source` 传进来，
+/// 这里只负责画。22px 是列表行的图标尺寸；SVG 是矢量的，任意 DPI 都清晰。
 component FileIcon inherits Rectangle {
-    in property <int> kind: 0;
+    in property <image> source;
+    in property <bool> mono: false;
     in property <color> tint: Palette.foreground;
 
     width: 22px;
     height: 22px;
     background: transparent;
 
-    if kind == 0 : FolderGlyph { tint: tint; }
-    if kind != 0 : IconBadge { kind: kind; tint: tint; }
+    Image {
+        source: root.source;
+        width: 22px;
+        height: 22px;
+        image-fit: contain;
+        // 单色图标（Tabler）按当前前景色重新上色；多色图标保持原样。
+        colorize: root.mono ? root.tint : transparent;
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -136,9 +95,9 @@ component FileRow inherits Rectangle {
         spacing: 12px;
 
         FileIcon {
-            kind: item.icon-kind;
+            source: item.icon;
+            mono: item.icon-mono;
             tint: Palette.foreground;
-            // 垂直对齐由外层布局自己处理，自定义组件没有 vertical-alignment
         }
 
         // 文件名：占满剩余宽度，过长省略
@@ -218,10 +177,13 @@ component SideItem inherits Rectangle {
         padding-left: 12px;
         spacing: 9px;
 
-        FolderGlyph {
-            tint: current ? Palette.selection-foreground : Palette.foreground;
-            width: 17px;
-            height: 17px;
+        // 侧边栏也用 Tabler 的文件夹图标，和工具栏同一套视觉语言
+        Image {
+            source: @image-url("../icons/tabler/folder.svg");
+            colorize: current ? Palette.selection-foreground : Palette.foreground;
+            width: 18px;
+            height: 18px;
+            image-fit: contain;
         }
         Text {
             text: label;
@@ -269,34 +231,38 @@ component AngleTri inherits Path {
 // Slint 的 Rectangle 不能旋转，折线箭头只能用矩形拼，拼出来的形状在小尺寸下
 // 又钝又难辨认（还出现过方向反了的问题）。所以工具栏统一改回**文字按钮**：
 // 中文标签在任何字体下都清晰，也不用为了一个图标引入图标字体。
-/// 文字按钮：用于「刷新」「新建」这类动作。
-/// 中文标签比找不到合适字形的符号可靠，也不用为了一个图标引入图标字体。
-component TextButton inherits Rectangle {
-    in property <string> label;
-    in property <bool> active: false;
+// ---------------------------------------------------------------------------
+// 界面图标按钮（Tabler Icons）
+//
+// Tabler 的 outline 图标是单色的，统一用 colorize 换成主题前景色，
+// 深浅主题与 Fluent/Material 换肤都会自动跟随，不需要第二套图标。
+// @image-url 只接受编译期静态路径，写不成 @image-url(root.name)，
+// 所以这里按名字显式分发；对外仍然只是一个名字字符串。
+// ---------------------------------------------------------------------------
+component IconButton inherits Rectangle {
+    in property <string> name;
+    /// 悬停提示。图标没有文字，提示就是它的可读名。
+    in property <string> tip;
     in property <bool> enabled: true;
     in property <bool> hovered: false;
 
     callback clicked();
 
-    // Slint 没有取字符串渲染宽度的 API（没有 measure），所以用固定宽度。
-    // 两个汉字在 12.5px 字号下约 25px，留 18px 左右内边距即 62px；
-    // 按钮太宽会让文字陷在一个大空框里，视觉上反而更挤。
-    width: 62px;
+    width: 34px;
     height: 34px;
-    border-radius: 5px;
-    background: hovered && enabled ? Palette.alternate-background
-              : (active ? Palette.selection-background : transparent);
+    border-radius: 6px;
+    background: hovered && enabled ? Palette.alternate-background : transparent;
     animate background { duration: 90ms; easing: ease-out; }
 
-    Text {
-        text: label;
-        color: active ? Palette.selection-foreground : Palette.foreground;
-        opacity: enabled ? 1.0 : 0.35;
-        font-size: 12.5px;
-        horizontal-alignment: center;
-        vertical-alignment: center;
-    }
+    // 每个分支用显式尺寸与位置（不引用 parent：组件体内 parent 不一定可访问）
+    if name == "ui-arrow-left" : Image { source: @image-url("../icons/tabler/arrow-left.svg"); colorize: Palette.foreground; opacity: root.enabled ? 1.0 : 0.32; x: 7px; y: 7px; width: 20px; height: 20px; image-fit: contain; }
+    if name == "ui-arrow-right" : Image { source: @image-url("../icons/tabler/arrow-right.svg"); colorize: Palette.foreground; opacity: root.enabled ? 1.0 : 0.32; x: 7px; y: 7px; width: 20px; height: 20px; image-fit: contain; }
+    if name == "ui-arrow-up" : Image { source: @image-url("../icons/tabler/arrow-up.svg"); colorize: Palette.foreground; opacity: root.enabled ? 1.0 : 0.32; x: 7px; y: 7px; width: 20px; height: 20px; image-fit: contain; }
+    if name == "ui-refresh" : Image { source: @image-url("../icons/tabler/refresh.svg"); colorize: Palette.foreground; opacity: root.enabled ? 1.0 : 0.32; x: 7px; y: 7px; width: 20px; height: 20px; image-fit: contain; }
+    if name == "ui-folder-plus" : Image { source: @image-url("../icons/tabler/folder-plus.svg"); colorize: Palette.foreground; opacity: root.enabled ? 1.0 : 0.32; x: 7px; y: 7px; width: 20px; height: 20px; image-fit: contain; }
+    if name == "ui-trash" : Image { source: @image-url("../icons/tabler/trash.svg"); colorize: Palette.foreground; opacity: root.enabled ? 1.0 : 0.32; x: 7px; y: 7px; width: 20px; height: 20px; image-fit: contain; }
+    if name == "ui-eye" : Image { source: @image-url("../icons/tabler/eye.svg"); colorize: Palette.foreground; opacity: root.enabled ? 1.0 : 0.32; x: 7px; y: 7px; width: 20px; height: 20px; image-fit: contain; }
+    if name == "ui-eye-off" : Image { source: @image-url("../icons/tabler/eye-off.svg"); colorize: Palette.foreground; opacity: root.enabled ? 1.0 : 0.32; x: 7px; y: 7px; width: 20px; height: 20px; image-fit: contain; }
 
     TouchArea {
         mouse-cursor: pointer;
@@ -304,9 +270,6 @@ component TextButton inherits Rectangle {
     }
 }
 
-// ---------------------------------------------------------------------------
-// 主窗口
-// ---------------------------------------------------------------------------
 /// 表头单元：列宽、对齐方式、可排序都在这里定义，
 /// 和 FileRow 里的同名列共用同一组宽度常量，避免两处各写一份而对不齐。
 component SortHeader inherits Rectangle {
@@ -384,6 +347,9 @@ export component AppWindow inherits Window {
     // 之前这里直接复用 status-text，结果「某目录无匹配项」时会把这句
     // 状态栏文案同时画在列表中间，看起来像渲染残留。
     in-out property <string> empty-message: "空目录";
+    // 未收录类型用的通用文件图标，由 Rust 侧启动时填入。
+    // 放在顶层属性而不是让每行回退，是为了避免 ListView 每构造一行就重新解析 SVG。
+    in-out property <image> default-icon;
 
     callback navigate(string);
     callback go-back();
@@ -425,10 +391,11 @@ export component AppWindow inherits Window {
                 padding-bottom: 8px;
                 spacing: 10px;
 
-                TextButton { label: "后退"; enabled: root.can-go-back; clicked => { root.go-back(); } }
-                TextButton { label: "前进"; enabled: root.can-go-forward; clicked => { root.go-forward(); } }
-                TextButton { label: "上级"; enabled: root.can-go-up; clicked => { root.go-up(); } }
-                TextButton { label: "刷新"; clicked => { root.refresh(); } }
+                // 导航与操作图标全部来自 Tabler Icons
+                IconButton { name: "ui-arrow-left"; tip: "后退"; enabled: root.can-go-back; clicked => { root.go-back(); } }
+                IconButton { name: "ui-arrow-right"; tip: "前进"; enabled: root.can-go-forward; clicked => { root.go-forward(); } }
+                IconButton { name: "ui-arrow-up"; tip: "上级"; enabled: root.can-go-up; clicked => { root.go-up(); } }
+                IconButton { name: "ui-refresh"; tip: "刷新"; clicked => { root.refresh(); } }
 
                 Rectangle { width: 8px; background: transparent; }
 
@@ -445,7 +412,13 @@ export component AppWindow inherits Window {
                         padding-left: 10px;
                         padding-right: 10px;
                         spacing: 8px;
-                        FolderGlyph { tint: Palette.foreground; width: 15px; height: 15px; }
+                        Image {
+                            source: @image-url("../icons/tabler/folder.svg");
+                            colorize: Palette.foreground;
+                            width: 16px;
+                            height: 16px;
+                            image-fit: contain;
+                        }
                         Text {
                             text: root.current-path;
                             color: Palette.foreground;
@@ -460,13 +433,13 @@ export component AppWindow inherits Window {
 
                 Rectangle { width: 4px; background: transparent; }
 
-                // 隐藏项开关：用文字标明状态，比 ◉/◎ 这种字符直观
-                TextButton {
-                    label: root.show-hidden ? "隐藏项：显示" : "隐藏项：过滤";
-                    active: root.show-hidden;
+                // 隐藏项开关：睁眼＝隐藏项可见，闭眼＝已过滤
+                IconButton {
+                    name: root.show-hidden ? "ui-eye" : "ui-eye-off";
+                    tip: root.show-hidden ? "隐藏项：显示中" : "隐藏项：已过滤";
                     clicked => { root.toggle-hidden(); }
                 }
-                TextButton { label: "新建"; clicked => { root.create-folder(); } }
+                IconButton { name: "ui-folder-plus"; tip: "新建文件夹"; clicked => { root.create-folder(); } }
             }
         }
 
@@ -572,10 +545,7 @@ export component AppWindow inherits Window {
                             }
                         }
 
-                        Button {
-                            text: "删除";
-                            clicked => { root.delete-selected(); }
-                        }
+                        IconButton { name: "ui-trash"; tip: "移入回收站"; clicked => { root.delete-selected(); } }
                     }
                 }
 

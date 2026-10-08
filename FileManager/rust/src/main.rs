@@ -9,6 +9,7 @@
 //! 通常远低于一帧的预算；等真的遇到网络盘再用 `spawn_local` 挪出去。
 
 mod filemodel;
+mod icons;
 
 slint::include_modules!();
 
@@ -37,6 +38,8 @@ struct State {
     sort_key: u8,
     sort_desc: bool,
     query: String,
+    /// 图标缓存。按需解码 + 内存缓存，不引入任何周期性唤醒。
+    icons: icons::IconCache,
 }
 
 fn sort_key_name(key: u8) -> Option<&'static str> {
@@ -52,10 +55,18 @@ fn sort_key_name(key: u8) -> Option<&'static str> {
 const BUILTIN_STYLE: &str = env!("FILEMANAGER_STYLE");
 
 fn main() -> Result<(), slint::PlatformError> {
+
     let ui = AppWindow::new()?;
 
     // 状态栏显示编译期烘焙的风格，避免「以为在测 Material 其实跑的是 Fluent」。
     ui.set_style_name(slint::SharedString::from(BUILTIN_STYLE));
+
+    // 通用文件图标在启动时解析一次，之后所有「未收录类型」的行共用同一个 Image，
+    // 避免 ListView 每构造一行就重新解析一次 SVG。
+    let icon_cache = icons::IconCache::default();
+    if let Some(img) = icon_cache.get(icons::DEFAULT_FILE_ICON) {
+        ui.set_default_icon(img);
+    }
 
     let model = Rc::new(VecModel::<FileEntry>::default());
     ui.set_files(ModelRc::from(model.clone()));
@@ -66,10 +77,19 @@ fn main() -> Result<(), slint::PlatformError> {
     // 平台层参数：让 niri 能按 app-id 认领窗口（对 Wayland 生效，必须在 show 之前调用）。
     slint::set_xdg_app_id("filemanager").ok();
 
+    // 允许 `filemanager [目录]` 指定启动目录：从终端直接打开某个路径很方便，
+    // 也便于截图核对图标。参数无效或未给时回退到家目录。
+    let start_dir = env::args_os()
+        .nth(1)
+        .map(PathBuf::from)
+        .filter(|p| p.is_dir())
+        .or_else(|| home.clone())
+        .unwrap_or_else(|| PathBuf::from("/"));
+
     let state = State {
         ui: ui.clone_strong(),
         all: Vec::new(),
-        cwd: home.clone().unwrap_or_else(|| PathBuf::from("/")),
+        cwd: start_dir,
         home: home.clone(),
         model,
         back: Vec::new(),
@@ -77,6 +97,7 @@ fn main() -> Result<(), slint::PlatformError> {
         sort_key: 0,
         sort_desc: false,
         query: String::new(),
+        icons: icon_cache,
     };
 
     wire(&ui);
@@ -287,6 +308,7 @@ impl State {
             .map(|(index, (path, meta))| {
                 let mut entry = entry_of(path, meta);
                 entry.alt = index % 2 == 1;
+                resolve_icon(&self.icons, &self.ui, path, meta.is_dir(), &mut entry);
                 entry
             })
             .collect();
@@ -471,16 +493,48 @@ impl State {
 /// 由「路径 + 元数据」构造一个界面条目。
 fn entry_of(path: &Path, meta: &fs::Metadata) -> FileEntry {
     let is_dir = meta.is_dir();
-    let (icon_kind, type_text) = fm::kind_of(path, is_dir);
+    let type_text = fm::describe_kind(path, is_dir);
     FileEntry {
         name: slint::SharedString::from(fm::base_name(path)),
         path: slint::SharedString::from(path.display().to_string()),
         is_dir,
         size_text: slint::SharedString::from(fm::format_size(meta)),
         modified_text: slint::SharedString::from(fm::format_modified(meta)),
-        icon_kind,
+        icon: slint::Image::default(),   // 由 resolve_icon 填
+        icon_mono: false,                // 由 resolve_icon 填
         type_text: slint::SharedString::from(type_text),
         alt: false,   // 由 refresh_model 按行号覆盖
+    }
+}
+
+/// 给一个条目选图标并填进去。
+///
+/// 选择顺序：
+///   1. 目录 -> 按目录名匹配（`src`、`node_modules`、`.git`…），未命中用通用文件夹图标；
+///   2. 文件 -> 按扩展名匹配，未命中用 `default-icon`（启动时已解析好的通用文件图标）。
+///
+/// 特别注意 `.gitignore` 这类「文件名即类型」的文件：它们的扩展名是 `gitignore`，
+/// 所以在按扩展名查之前，先用完整文件名当扩展名查一次。
+fn resolve_icon(
+    cache: &icons::IconCache,
+    ui: &AppWindow,
+    path: &Path,
+    is_dir: bool,
+    entry: &mut FileEntry,
+) {
+    let icon_name = icons::icon_name_for_path(path, is_dir);
+
+    match cache.get(icon_name) {
+        Some(img) => {
+            entry.icon = img;
+            entry.icon_mono = icons::is_monochrome(icon_name);
+        }
+        None => {
+            // 理论上不会发生（icons 模块的测试会兜住映射表的完整性），
+            // 真出现了就退回通用图标，而不是留一个空图标。
+            entry.icon = ui.get_default_icon();
+            entry.icon_mono = false;
+        }
     }
 }
 

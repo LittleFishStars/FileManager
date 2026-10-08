@@ -229,33 +229,22 @@ fn civil_from_days(days: i64) -> (i64, u32, u32) {
     (if m <= 2 { y + 1 } else { y }, m, d)
 }
 
-/// 按扩展名给条目归类，`.slint` 侧据此决定画什么图标。
-pub fn kind_of(path: &Path, is_dir: bool) -> (i32, String) {
+/// 给条目一个人类可读的类型描述（用于列表的「类型」列）。
+///
+/// 刻意不在这里维护第二张扩展名表：类型由 `icons` 模块选出的图标名推导，
+/// 保证「图标」与「类型」永远一致。以前两处各写一份，结果 `.dockerfile`
+/// 有 Docker 图标、类型列却显示「文件」。
+pub fn describe_kind(path: &Path, is_dir: bool) -> String {
     if is_dir {
-        return (0, "文件夹".to_string());
+        return "文件夹".to_string();
     }
     let ext = extension_of(path);
-    let (kind, label) = match ext.as_str() {
-        "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp" | "svg" | "ico" | "avif" | "heic" => {
-            (1, "图片")
-        }
-        "mp3" | "flac" | "wav" | "ogg" | "opus" | "m4a" | "aac" => (2, "音频"),
-        "mp4" | "mkv" | "webm" | "mov" | "avi" | "flv" => (3, "视频"),
-        "zip" | "tar" | "gz" | "xz" | "zst" | "bz2" | "7z" | "rar" => (4, "压缩包"),
-        "rs" | "py" | "js" | "ts" | "tsx" | "jsx" | "c" | "h" | "cpp" | "hpp" | "go" | "java"
-        | "sh" | "toml" | "json" | "yaml" | "yml" | "sql" | "slint" => (5, "代码"),
-        "pdf" | "doc" | "docx" | "xls" | "xlsx" | "ppt" | "pptx" | "odt" | "ods" | "odp" => {
-            (6, "文档")
-        }
-        "txt" | "md" | "rst" | "log" | "conf" | "ini" => (7, "文本"),
-        _ => (8, if ext.is_empty() { "文件" } else { "未知" }),
-    };
-    let label = if ext.is_empty() {
-        label.to_string()
+    let suffix = if ext.is_empty() {
+        String::new()
     } else {
-        format!("{label} · .{ext}")
+        format!(" · .{ext}")
     };
-    (kind, label)
+    format!("{}{suffix}", crate::icons::kind_label_for_path(path))
 }
 
 /// 路径按显示需要缩写到家目录。

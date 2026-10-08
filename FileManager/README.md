@@ -18,7 +18,8 @@ Fluent Design / Material Design 3 风格的 Linux 原生文件管理器，用 **
 - 隐藏项开关（顶部 `◉ / ◎`）
 - 状态栏实时显示条目数与当前编译期风格名
 - 列头即排序控件（点字段切换、再点切升降序），列宽与列表严格对齐
-- 工具栏与导航箭头全部用几何图形绘制，不依赖任何符号字体
+- 文件/文件夹图标用 Material Icon Theme，界面图标用 Tabler Icons（见下节）
+- 支持 `filemanager [目录]` 指定启动目录
 
 **尚未实现**：面包屑地址栏可编辑、右键上下文菜单、多选、缩略图预览、
 剪贴板（复制 / 剪切 / 粘贴）、标签页、回收站浏览、图标主题接入。
@@ -150,11 +151,48 @@ rust/
   ui/app.slint             # 界面（编译成原生 Rust）
   src/main.rs              # 导航 / 打开 / 重命名 / 删除 / 过滤的接线
   src/filemodel.rs         # 目录读取、排序、格式化（纯逻辑，无 UI 依赖）
+  src/icons.rs             # 图标内嵌与「文件名 -> 图标」映射 + 自检测试
+  icons/material/*.svg     # 文件/文件夹图标（Material Icon Theme）
+  icons/tabler/*.svg       # 界面图标（Tabler Icons）
 scripts/
   measure.py               # niri 下的冷启动与稳态 Pss 测量
   shot.py                  # 给窗口截图，改完界面后自查显示效果
+  fetch_icons.py           # 从上游抓取图标（含上游改名校验）
   dev.sh                   # 构建封装（处理沙箱下只读 CARGO_HOME）
 ```
+
+## 图标
+
+两类图标，分别来自两个上游，**SVG 随源码入库**，编译期用 `include_bytes!`
+打进二进制，运行时不依赖任何外部文件：
+
+| 用途 | 来源 | 说明 |
+|---|---|---|
+| 文件 / 文件夹图标 | [Material Icon Theme](https://github.com/material-extensions/vscode-material-icon-theme/tree/main/icons) | 多色，按扩展名与目录名匹配，保持原色 |
+| 界面图标（工具栏 / 侧边栏 / 地址栏） | [Tabler Icons](https://github.com/tabler/tabler-icons) | 单色 outline，用 Slint 的 `colorize` 换成主题前景色 |
+
+补图标或上游更新：
+
+```bash
+python3 FileManager/scripts/fetch_icons.py          # 只下缺失的
+python3 FileManager/scripts/fetch_icons.py --list   # 只打印清单
+python3 FileManager/scripts/fetch_icons.py --force  # 全部重下
+```
+
+**脚本会先拿上游的文件清单校验一遍名字再下载。** 上游会改图标名（例如
+`folder-music` 已被 `folder-audio` 取代），静默改名会让某类文件悄悄退回通用图标
+却毫无提示，所以宁可先比一次清单、报错让人来处理。
+
+换肤不需要第二套图标：Tabler 那批是单色的，`colorize` 直接跟随 `Palette.foreground`，
+所以 Fluent ⇄ Material、浅色 ⇄ 深色都会自动适配。
+
+`rust/src/icons.rs` 里有 5 条自检测试，其中两条覆盖最危险的静默失败：
+
+- `every_mapped_icon_exists` —— 映射表引用的图标名必须真的内嵌了文件
+- `every_icon_decodes` —— 每个内嵌图标必须真的能解码成 `Image`
+  （名字对、字节在、但解码失败时界面只会悄悄退回通用图标，功能看着正常）
+
+跑测试：`FileManager/scripts/dev.sh test`
 
 ## 数据来源与设计取舍
 

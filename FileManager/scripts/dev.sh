@@ -50,6 +50,14 @@ if [[ -n "$TOOLCHAIN_BIN" ]]; then
     export RUSTC="$TOOLCHAIN_BIN/rustc"
     export RUSTDOC="$TOOLCHAIN_BIN/rustdoc"
     CARGO="$TOOLCHAIN_BIN/cargo"
+    # rustc 依赖 toolchain 自带的 libLLVM.so。它的 RUNPATH 只有 $ORIGIN/../lib，
+    # 一旦 cargo 的构建脚本再套一层调用 rustc，这个相对路径就解析不到，
+    # 报 "error while loading shared libraries: libLLVM.so.22.1-rust-...-stable"。
+    # 显式给出库目录最省事，也避免依赖 RPATH 是否被继承。
+    TOOLCHAIN_LIB="$(dirname "$TOOLCHAIN_BIN")/lib"
+    if [[ -d "$TOOLCHAIN_LIB" ]]; then
+        export LD_LIBRARY_PATH="$TOOLCHAIN_LIB${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+    fi
     : "${RUSTUP_HOME:=$HOME/.local/share/rustup}"
     export RUSTUP_HOME
 else
