@@ -337,7 +337,14 @@ export component AppWindow inherits Window {
     min-height: 380px;
 
     // 由 Rust 侧在启动时填入
-    in-out property <[Place]> places: [];
+    // 侧边栏分两区，用两个独立数组承载。
+    //
+    // 为什么不用一个数组 + section 字段再在界面里筛：Slint 里被 `if` 包住的元素
+    // **不占布局格子**。用两段 `for ... : SideItem { if section == N : SideItem {...} }`
+    // 会让两组元素叠在同一个位置上渲染，看起来像「后一组只剩图标、文字被盖住」。
+    // 拆成两条独立循环各自渲染，布局才正确。
+    in-out property <[Place]> places-primary: [];
+    in-out property <[Place]> places-folders: [];
     in-out property <[FileEntry]> files: [];
     in-out property <string> current-path: "";
     // 当前目录的**原始绝对路径**，只用于状态判断，不显示。
@@ -506,7 +513,22 @@ export component AppWindow inherits Window {
                         }
                     }
 
-                    for place in root.places : SideItem {
+                    // 第一区：固定入口
+                    for place in root.places-primary : SideItem {
+                        label: place.label;
+                        current: root.current-path-raw == place.path;
+                        clicked => { root.navigate(place.path); }
+                    }
+
+                    // 两区之间的分隔线（对齐参考设计：细线，不写小标题）
+                    Rectangle {
+                        height: 1px;
+                        background: Palette.border;
+                        opacity: 0.7;
+                    }
+
+                    // 第二区：家目录下的文件夹，标签用目录本名（与文件管理器惯例一致）
+                    for place in root.places-folders : SideItem {
                         label: place.label;
                         current: root.current-path-raw == place.path;
                         clicked => { root.navigate(place.path); }
@@ -515,7 +537,8 @@ export component AppWindow inherits Window {
                     Rectangle { vertical-stretch: 1; background: transparent; }
 
                     Text {
-                        text: root.show-hidden ? "已显示隐藏项" : "隐藏项已过滤";
+                        text: root.status-text;
+                        overflow: elide;
                         color: Palette.foreground;
                         opacity: 0.45;
                         font-size: 11px;

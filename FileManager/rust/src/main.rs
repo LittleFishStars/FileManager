@@ -40,6 +40,17 @@ struct State {
     query: String,
     /// 图标缓存。按需解码 + 内存缓存，不引入任何周期性唤醒。
     icons: icons::IconCache,
+    /// 当前看的是普通目录还是回收站。回收站不是普通目录：
+    /// 里面是 trashinfo 还原出来的「原始路径」，而且删除语义是永久删除。
+    location: Location,
+}
+
+/// 当前浏览位置。
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Location {
+    Dir,
+    /// 正在浏览回收站。存它自己的路径，避免每帧重算。
+    Trash(PathBuf),
 }
 
 fn sort_key_name(key: u8) -> Option<&'static str> {
@@ -72,8 +83,9 @@ fn main() -> Result<(), slint::PlatformError> {
     ui.set_files(ModelRc::from(model.clone()));
 
     let home = env::var_os("HOME").map(PathBuf::from).filter(|p| p.is_dir());
-    let places = build_places(home.as_deref());
-    ui.set_places(ModelRc::from(Rc::new(VecModel::from(places.clone()))));
+    let (places_primary, places_folders) = build_places(home.as_deref());
+    ui.set_places_primary(ModelRc::from(Rc::new(VecModel::from(places_primary))));
+    ui.set_places_folders(ModelRc::from(Rc::new(VecModel::from(places_folders))));
     // 平台层参数：让 niri 能按 app-id 认领窗口（对 Wayland 生效，必须在 show 之前调用）。
     slint::set_xdg_app_id("filemanager").ok();
 
@@ -98,6 +110,7 @@ fn main() -> Result<(), slint::PlatformError> {
         sort_desc: false,
         query: String::new(),
         icons: icon_cache,
+        location: Location::Dir,
     };
 
     wire(&ui);
@@ -276,8 +289,30 @@ impl State {
         }
     }
 
-    /// 重新读盘。
+    /// 重新读盘。回收站走另一条路：它不是普通目录。
     fn reload(&mut self) {
+        // 先判断是不是走了回收站：回收站目录本身是普通目录，
+        // 但列出来的应当是 trashinfo 还原后的「原始路径」。
+        if let Some(home) = self.home.clone() {
+            let trash = fm::home_trash_dir(&home);
+            if trash.is_dir()
+                && self.cwd.canonicalize().unwrap_or_else(|_| self.cwd.clone())
+                    == trash.canonicalize().unwrap_or_else(|_| trash.clone())
+            {
+                self.location = Location::Trash(trash.clone());
+            } else if matches!(self.location, Location::Trash(_)) {
+                self.location = Location::Dir;
+            }
+        }
+
+        if let Location::Trash(_) = self.location {
+            let home = self.home.clone().unwrap_or_default();
+            self.all = fm::list_trash(&home);
+            self.ui.set_selected_index(-1);
+            self.refresh_model();
+            return;
+        }
+
         let show_hidden = self.ui.get_show_hidden();
         let listing = fm::list_dir(&self.cwd, show_hidden);
         self.all = listing.entries;
@@ -363,11 +398,14 @@ impl State {
             return None;
         }
         let row = self.model.row_data(index as usize)?;
-        let name = row.name.to_string();
-        if name.is_empty() || name == ".." {
+        // 展示模型里的 path 就是条目的真实位置：
+        // 普通目录里是「当前目录 + 名称」，回收站里是 trashinfo 还原出的原始路径。
+        // 用它对回收站尤其重要——那里不能靠 cwd.join(name)。
+        let path = row.path.to_string();
+        if path.is_empty() || path == ".." {
             return None;
         }
-        Some(self.cwd.join(name))
+        Some(PathBuf::from(path))
     }
 
     /// 激活选中项：目录就进入，文件就交给系统默认应用。
@@ -445,6 +483,27 @@ impl State {
             return;
         };
         let name = fm::base_name(&target);
+
+        // 在回收站里按删除 = 永久删除（回收站本来就该有这个出口），
+        // 而不是再往回收站里塞一次。
+        if matches!(self.location, Location::Trash(_)) {
+            let result = if target.is_dir() {
+                fs::remove_dir_all(&target)
+            } else {
+                fs::remove_file(&target)
+            };
+            return match result {
+                Ok(()) => {
+                    // 回收站内的条目要连 info 一起清掉，否则重复删除会重建同名条目
+                    self.purge_trash_entry(&target);
+                    self.reload();
+                    self.ui.set_status_text(slint::SharedString::from(format!(
+                        "已永久删除：{name}"
+                    )));
+                }
+                Err(err) => self.set_error(format!("永久删除失败：{}", fm::describe_io_error(&err))),
+            };
+        }
         let mut last_error = String::new();
         for tool in ["trash-put", "gio"] {
             let mut command = Command::new(tool);
@@ -482,6 +541,65 @@ impl State {
                 )));
             }
             Err(err) => self.set_error(format!("新建失败：{}", fm::describe_io_error(&err))),
+        }
+    }
+
+    /// 彻底清除回收站里的一条：删掉 `files/` 里的存储副本，并清掉对应的 trashinfo。
+    ///
+    /// 注意不能拿 `selected_path()` 去删——在回收站里它给的是**原始路径**，
+    /// 那个路径在移入回收站时就已经不存在了，对着它删除只会报「文件不存在」。
+    /// 真正要删的是回收站内的存储副本，所以要按名字（或 trashinfo 里的记录）反查。
+    fn purge_trash_entry(&mut self, original: &Path) {
+        let Some(home) = self.home.clone() else { return };
+        let trash = fm::home_trash_dir(&home);
+        let files_dir = trash.join("files");
+        let info_dir = trash.join("info");
+
+        // 1) 多数情况下存储名与原名相同，先直接试
+        let mut stored = files_dir.join(original);
+        let mut found = stored.exists();
+
+        // 2) 重名条目会被加后缀（foo.2 之类），这时按 trashinfo 还原出的原始路径找
+        if !found {
+            if let Ok(read) = fs::read_dir(&files_dir) {
+                for item in read.flatten() {
+                    let candidate = item.path();
+                    let info = info_dir.join(format!(
+                        "{}.trashinfo",
+                        item.file_name().to_string_lossy()
+                    ));
+                    let matches_original = fs::read_to_string(&info)
+                        .ok()
+                        .and_then(|t| fm::trashinfo_original_path(&t))
+                        .map(|p| p == original)
+                        .unwrap_or(false);
+                    if matches_original {
+                        stored = candidate;
+                        found = true;
+                        break;
+                    }
+                }
+            }
+        }
+        if !found {
+            self.set_error(format!("在回收站里找不到 {} 对应的副本", original.display()));
+            return;
+        }
+
+        let stored_name = stored
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let result = if stored.is_dir() {
+            fs::remove_dir_all(&stored)
+        } else {
+            fs::remove_file(&stored)
+        };
+        match result {
+            Ok(()) => {
+                let _ = fs::remove_file(info_dir.join(format!("{stored_name}.trashinfo")));
+            }
+            Err(err) => self.set_error(format!("清除失败：{}", fm::describe_io_error(&err))),
         }
     }
 
@@ -543,41 +661,79 @@ fn resolve_icon(
     }
 }
 
-/// 侧边栏入口：只收录真实存在的目录。
-fn build_places(home: Option<&Path>) -> Vec<Place> {
-    let mut places = Vec::new();
-    let mut push = |label: &str, path: PathBuf| {
-        if path.is_dir() {
-            // 存软链解析后的真实路径：读取目录时 `list_dir` 会做 canonicalize，
-            // 当前目录因此总是真实路径；侧边栏这里若保留软链形式（例如某些发行版
-            // 的 /home 是软链、/run/media 也可能被替换），比较就会落空、高亮失灵。
-            let resolved = path.canonicalize().unwrap_or(path);
-            places.push(Place {
-                label: slint::SharedString::from(label.to_string()),
-                path: slint::SharedString::from(resolved.display().to_string()),
-            });
+/// 侧边栏入口，返回 (第一区, 第二区)：
+///   第一区 —— 固定入口（主文件夹 / 回收站 / 根目录 / 临时文件 / 外部设备）
+///   第二区 —— 家目录下扫到的文件夹
+///
+/// 两区的差别不只是位置：第一区是「写死的常见位置」，第二区是「按机器实际情况扫出来的」，
+/// 所以换一台机器时第二区会自然跟着变，不用改代码。
+///
+/// 每条都存软链解析后的真实路径：读取目录时 `list_dir` 会 canonicalize，当前目录总是
+/// 真实路径；这里若保留软链形式（某些发行版 /home 是软链），侧边栏高亮会落空。
+fn build_places(home: Option<&Path>) -> (Vec<Place>, Vec<Place>) {
+    let mut primary = Vec::new();
+    let mut folders = Vec::new();
+    // 去重按路径算：.config / .local 既在固定名单里，也会被第二区扫到
+    let mut seen: Vec<String> = Vec::new();
+
+    let mut push = |out: &mut Vec<Place>, seen: &mut Vec<String>, label: &str, path: PathBuf| {
+        if !path.is_dir() {
+            return;
         }
+        let resolved = path.canonicalize().unwrap_or(path);
+        let key = resolved.display().to_string();
+        if seen.contains(&key) {
+            return;
+        }
+        seen.push(key.clone());
+        out.push(Place {
+            label: slint::SharedString::from(label.to_string()),
+            path: slint::SharedString::from(key),
+        });
     };
 
-    push("根目录 /", PathBuf::from("/"));
+    // ---- 第一区：固定入口 ----
     if let Some(home) = home {
-        push("主目录", home.to_path_buf());
-        for (label, dir) in [
-            ("桌面", "Desktop"),
-            ("文稿", "Documents"),
-            ("下载", "Downloads"),
-            ("图片", "Pictures"),
-            ("音乐", "Music"),
-            ("视频", "Videos"),
-            ("项目", "Projects"),
-            ("配置", ".config"),
-        ] {
-            push(label, home.join(dir));
+        push(&mut primary, &mut seen, "主文件夹", home.to_path_buf());
+        // 回收站：家目录内的 freedesktop 回收站。没有就不显示（从没删过东西时确实不存在）。
+        let trash = fm::home_trash_dir(home);
+        if trash.is_dir() {
+            push(&mut primary, &mut seen, "回收站", trash);
         }
     }
-    // XDG 之外的常见挂载点
-    for (label, dir) in [("临时文件", "/tmp"), ("外部设备", "/run/media")] {
-        push(label, PathBuf::from(dir));
+    push(&mut primary, &mut seen, "根目录 /", PathBuf::from("/"));
+    push(&mut primary, &mut seen, "临时文件", PathBuf::from("/tmp"));
+    push(&mut primary, &mut seen, "外部设备", PathBuf::from("/run/media"));
+
+    // ---- 第二区：家目录下扫到的文件夹 ----
+    if let Some(home) = home {
+        // 常见目录排前面，其余按名字排后面，这样顺序稳定、可预期
+        const PREFERRED: &[&str] = &[
+            "Desktop", "Documents", "Downloads", "Pictures", "Music", "Videos",
+            "Projects", "Files", "Games", "Repository", ".config", ".local",
+        ];
+        let mut dirs: Vec<String> = Vec::new();
+        if let Ok(read) = fs::read_dir(home) {
+            for item in read.flatten() {
+                let name = item.file_name().to_string_lossy().into_owned();
+                // 常规隐藏目录不列，但 .config / .local 是明确要的
+                if name.starts_with('.') && !matches!(name.as_str(), ".config" | ".local") {
+                    continue;
+                }
+                if item.path().is_dir() {
+                    dirs.push(name);
+                }
+            }
+        }
+        dirs.sort_by_key(|name| {
+            let idx = PREFERRED.iter().position(|p| p == name);
+            (idx.is_none(), idx.unwrap_or(usize::MAX), name.clone())
+        });
+        // 侧边栏不该长到需要滚动；固定入口已占几条，这里留 14 条上限
+        for name in dirs.into_iter().take(14) {
+            push(&mut folders, &mut seen, &name, home.join(&name));
+        }
     }
-    places
+
+    (primary, folders)
 }

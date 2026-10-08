@@ -285,6 +285,80 @@ pub fn normalize(path: &Path) -> PathBuf {
     }
 }
 
+/// 解析一个 `.trashinfo` 文件，取出原始路径（freedesktop trash 规范）。
+///
+/// 格式只有两行有信息量：
+/// ```text
+/// [Trash Info]
+/// Path=/home/me/%E6%96%B0%E5%BB%BA%E6%96%87%E4%BB%B6%E5%A4%B9
+/// DeletionDate=2026-10-09T03:37:15
+/// ```
+/// `Path` 是 **URL 百分号编码**的，必须解码，否则中文文件名会显示成一串 `%E6%...`。
+pub fn trashinfo_original_path(text: &str) -> Option<PathBuf> {
+    for line in text.lines() {
+        if let Some(raw) = line.strip_prefix("Path=") {
+            return Some(PathBuf::from(percent_decode(raw.trim())));
+        }
+    }
+    None
+}
+
+/// 只解码百分号转义（`%XX`）。不需要处理 `+`，因为 trashinfo 用的是 URL 编码而非表单编码。
+///
+/// 自己实现而不是引入 `percent-encoding`：只有十几行，且要处理的是「非法转义原样保留」
+/// 这种容错行为，自己写更好控制。
+pub fn percent_decode(input: &str) -> String {
+    let bytes = input.as_bytes();
+    let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            let hi = (bytes[i + 1] as char).to_digit(16);
+            let lo = (bytes[i + 2] as char).to_digit(16);
+            if let (Some(hi), Some(lo)) = (hi, lo) {
+                out.push((hi * 16 + lo) as u8);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+/// 回收站目录（家目录内的那一个）。
+/// 挂载点上的回收站（`<挂载点>/.Trash-<uid>`）暂不支持，见 README 的「尚未实现」。
+pub fn home_trash_dir(home: &Path) -> PathBuf {
+    home.join(".local/share/Trash")
+}
+
+/// 读取家目录回收站里的条目。回收站不存在时返回空列表（不是错误：从没删过东西）。
+pub fn list_trash(home: &Path) -> Vec<(PathBuf, fs::Metadata)> {
+    let trash = home_trash_dir(home);
+    let files_dir = trash.join("files");
+    let info_dir = trash.join("info");
+    let Ok(read) = fs::read_dir(&files_dir) else {
+        return Vec::new();
+    };
+
+    let mut out = Vec::new();
+    for item in read.flatten() {
+        let stored = item.file_name().to_string_lossy().into_owned();
+        let Ok(meta) = fs::metadata(item.path()) else {
+            continue;
+        };
+        // 优先用 trashinfo 里的原始路径，这样中文名与原始位置都能还原；
+        // 读不到就退回回收站内的存储名，至少不丢条目。
+        let original = fs::read_to_string(info_dir.join(format!("{stored}.trashinfo")))
+            .ok()
+            .and_then(|text| trashinfo_original_path(&text))
+            .unwrap_or_else(|| PathBuf::from(&stored));
+        out.push((original, meta));
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -293,6 +367,29 @@ mod tests {
     ///
     /// 这条测试钉住的是「展示路径 ≠ 判断路径」这个区分：曾经侧边栏拿缩写过后的
     /// 字符串去比原始路径，结果只有 /、/tmp、/run/media 会高亮，家目录下的项全失灵。
+    /// trashinfo 里的 Path 是百分号编码的，必须解码；中文名尤其明显。
+    #[test]
+    fn trashinfo_decodes_percent_escapes() {
+        let text = "[Trash Info]\nPath=/home/me/%E6%96%B0%E5%BB%BA%E6%96%87%E4%BB%B6%E5%A4%B9\nDeletionDate=2026-10-09T03:37:15\n";
+        assert_eq!(
+            trashinfo_original_path(text).unwrap(),
+            PathBuf::from("/home/me/新建文件夹")
+        );
+        // 没有 Path 行 -> None，不要瞎猜
+        assert!(trashinfo_original_path("[Trash Info]\nDeletionDate=x\n").is_none());
+    }
+
+    /// 非法转义要原样保留，不能吃掉字符或 panic。
+    #[test]
+    fn percent_decode_keeps_invalid_escapes() {
+        assert_eq!(percent_decode("abc"), "abc");
+        assert_eq!(percent_decode("a%20b"), "a b");
+        assert_eq!(percent_decode("%E4%B8%AD%E6%96%87"), "中文");
+        assert_eq!(percent_decode("100%"), "100%");      // 尾部孤立 %
+        assert_eq!(percent_decode("%ZZ"), "%ZZ");        // 非十六进制
+        assert_eq!(percent_decode("%2"), "%2");          // 截断
+    }
+
     #[test]
     fn display_path_abbreviates_home() {
         let home = Path::new("/home/me");
