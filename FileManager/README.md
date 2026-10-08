@@ -17,6 +17,8 @@ Fluent Design / Material Design 3 风格的 Linux 原生文件管理器，用 **
 - 排序：按名称 / 大小 / 修改时间 / 类型，可切升降序
 - 隐藏项开关（顶部 `◉ / ◎`）
 - 状态栏实时显示条目数与当前编译期风格名
+- 列头即排序控件（点字段切换、再点切升降序），列宽与列表严格对齐
+- 工具栏与导航箭头全部用几何图形绘制，不依赖任何符号字体
 
 **尚未实现**：面包屑地址栏可编辑、右键上下文菜单、多选、缩略图预览、
 剪贴板（复制 / 剪切 / 粘贴）、标签页、回收站浏览、图标主题接入。
@@ -71,6 +73,22 @@ touch FileManager/rust/build.rs && SLINT_STYLE=material-dark cargo run --release
 cargo install slint-viewer
 SLINT_STYLE=material slint-viewer FileManager/rust/ui/app.slint
 ```
+
+## 改完界面怎么看效果
+
+不要靠反复启动肉眼比对，直接截图：
+
+```bash
+python3 FileManager/scripts/shot.py                          # release 版
+python3 FileManager/scripts/shot.py --bin FileManager/rust/target/debug/filemanager
+```
+
+它用 niri 自己的 `screenshot-window` 动作（精确知道窗口边界），配 `--write-to-disk false`
+只送到剪贴板、不往 `~/Pictures` 落文件，再用 `wl-paste` 取回 PNG 存到
+`FileManager/shot.png`。比「抓全屏再猜窗口位置」可靠，也不会污染你的图片目录。
+
+**改界面时必须实际看一眼**：本项目踩过的坑里，有一半是编译和逻辑都过、但画面明显不对的
+（列头整块被涂成选中色、名称列被压成 0 宽、箭头小到看不清）。
 
 ## 性能
 
@@ -134,6 +152,7 @@ rust/
   src/filemodel.rs         # 目录读取、排序、格式化（纯逻辑，无 UI 依赖）
 scripts/
   measure.py               # niri 下的冷启动与稳态 Pss 测量
+  shot.py                  # 给窗口截图，改完界面后自查显示效果
   dev.sh                   # 构建封装（处理沙箱下只读 CARGO_HOME）
 ```
 

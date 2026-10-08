@@ -23,7 +23,8 @@ export struct FileEntry {
     modified-text: string,
     icon-kind: int,        // 与 filemodel::kind_of 的返回值对应：0 文件夹 1 图片 2 音频 3 视频 4 压缩包 5 代码 6 文档 7 文本 8 其他
     type-text: string,
-    hidden: bool,
+    // 斑马纹标记：由 Rust 侧按行号填充。
+    alt: bool,
 }
 
 /// 侧边栏的一项。
@@ -85,15 +86,8 @@ component IconBadge inherits Rectangle {
 
     // 注意：父级设了 opacity，子级颜色会一并变淡，所以这里用不透明色即可
     Text {
-        text: kind == 1 ? "I"
-            : kind == 2 ? "A"
-            : kind == 3 ? "V"
-            : kind == 4 ? "Z"
-            : kind == 5 ? "C"
-            : kind == 6 ? "D"
-            : kind == 7 ? "T"
-            : kind == 8 ? "·"
-            : "F";
+        // Slint 的三元运算符必须整条写在同一行，拆行会解析失败。
+        text: kind == 1 ? "I" : kind == 2 ? "A" : kind == 3 ? "V" : kind == 4 ? "Z" : kind == 5 ? "C" : kind == 6 ? "D" : kind == 7 ? "T" : kind == 8 ? "·" : "F";
         color: Palette.foreground;
         font-size: 12px;
         font-weight: 600;
@@ -124,16 +118,16 @@ component FileRow inherits Rectangle {
     in property <FileEntry> item;
     in property <bool> selected: false;
     in property <bool> hovered: false;
+    // 斑马纹：奇数行给一点底色，长列表里横向扫视不容易串行。
+    in property <bool> alt: false;
 
     callback clicked();
     callback activated();
 
     height: 36px;
     border-radius: 5px;
-    // 选中 / 悬停 / 常态三档底色，全部来自 Palette
-    background: selected
-        ? Palette.selection-background
-        : (hovered ? Palette.alternate-background : transparent);
+    // 三元必须单行，见文件开头的说明。
+    background: selected ? Palette.selection-background : (hovered ? Palette.alternate-background : (alt ? Palette.alternate-background : transparent));
     animate background { duration: 90ms; easing: ease-out; }
 
     HorizontalLayout {
@@ -163,7 +157,7 @@ component FileRow inherits Rectangle {
             color: Palette.foreground;
             opacity: 0.6;
             font-size: 11.5px;
-            width: 110px;
+            width: 96px;   // 与表头「类型」列一致
             vertical-alignment: center;
             overflow: elide;
         }
@@ -198,6 +192,7 @@ component FileRow inherits Rectangle {
     }
 
     TouchArea {
+        mouse-cursor: pointer;
         clicked => { root.clicked(); }
         double-clicked => { root.activated(); }
     }
@@ -216,9 +211,7 @@ component SideItem inherits Rectangle {
 
     height: 34px;
     border-radius: 5px;
-    background: current
-        ? Palette.selection-background
-        : (hovered ? Palette.alternate-background : transparent);
+    background: current ? Palette.selection-background : (hovered ? Palette.alternate-background : transparent);
     animate background { duration: 90ms; easing: ease-out; }
 
     HorizontalLayout {
@@ -243,70 +236,174 @@ component SideItem inherits Rectangle {
     }
 }
 
-/// 轻量工具按钮：只在悬停时出现底色，符合 Fluent 的"安静工具栏"做法。
-component ToolButton inherits Rectangle {
-    in property <string> label;
+// ---------------------------------------------------------------------------
+// 导航图标：用几何图形画，不用 ←→↑ 这类字符
+//
+// 字符当图标有两个毛病：不同字体的字形宽高不一，观感忽大忽小；
+// 而且没有任何字体保证这些码位一定存在。这里用「正方形转 45 度成三角形」凑出箭头尖。
+// 注意 `transform-rotation` 是 Transform 元素的属性，不能直接写在 Rectangle 上。
+// ---------------------------------------------------------------------------
+
+/// 一个朝向某个方向的三角形。
+///
+/// 为什么用 Path 而不是旋转 Rectangle：Slint 1.18 的 Rectangle **不支持旋转**
+/// （`transform-rotation` 只属于内部的 Transform 类型，`rotation-angle` 是它已废弃的别名）。
+/// Path 的 commands 用元素自身坐标系里的绝对像素，所以这里按 side 换算顶点。
+/// 注意：长度转字符串要先除以 1px；Path 里面也不能放子元素。
+component AngleTri inherits Path {
+    in property <length> side: 7px;
+    in property <color> tint: Palette.foreground;
+    /// 0 上尖 1 下尖 2 左尖 3 右尖
+    in property <int> dir: 1;
+
+    width: side;
+    height: side;
+    fill: tint;
+    commands: root.dir == 0 ? "M " + (root.side / 2px) + " 0 L " + (root.side / 1px) + " " + (root.side / 1px) + " L 0 " + (root.side / 1px) + " Z"
+            : root.dir == 1 ? "M 0 0 L " + (root.side / 1px) + " 0 L " + (root.side / 2px) + " " + (root.side / 1px) + " Z"
+            : root.dir == 2 ? "M " + (root.side / 1px) + " 0 L " + (root.side / 1px) + " " + (root.side / 1px) + " L 0 " + (root.side / 2px) + " Z"
+            : "M 0 0 L " + (root.side / 1px) + " " + (root.side / 2px) + " L 0 " + (root.side / 1px) + " Z";
+}
+
+/// 方向箭头。`dir`：0 左 1 右 2 上 3 下。
+component PointArrow inherits Rectangle {
+    in property <int> dir: 0;
+    in property <color> tint: Palette.foreground;
+
+    width: 22px;
+    height: 22px;
+    background: transparent;
+
+    // 箭杆：一根横/竖条（比箭头窄一点，视觉上更像箭头）
+    Rectangle {
+        width: root.dir <= 1 ? 9px : 3px;
+        height: root.dir <= 1 ? 3px : 9px;
+        x: root.dir == 0 ? 0px : (root.dir == 1 ? 13px : 9.5px);
+        y: root.dir == 0 ? 9.5px : (root.dir == 1 ? 9.5px : (root.dir == 2 ? 0px : 13px));
+        border-radius: 1.5px;
+        background: root.tint;
+    }
+    // 箭头尖
+    AngleTri {
+        side: 13px;
+        tint: root.tint;
+        dir: root.dir == 2 ? 0 : (root.dir == 3 ? 1 : (root.dir == 0 ? 2 : 3));
+        x: root.dir == 0 ? 0px : (root.dir == 1 ? 9px : 4.5px);
+        y: root.dir == 2 ? 0px : (root.dir == 3 ? 9px : 4.5px);
+    }
+}
+
+/// 纯图标按钮。
+component GlyphButton inherits Rectangle {
+    in property <int> dir: 0;
     in property <bool> enabled: true;
     in property <bool> hovered: false;
 
     callback clicked();
 
-    min-width: 28px;
-    height: 28px;
+    width: 34px;
+    height: 32px;
     border-radius: 5px;
     background: hovered && enabled ? Palette.alternate-background : transparent;
     animate background { duration: 90ms; easing: ease-out; }
 
+    PointArrow {
+        dir: dir;
+        tint: Palette.foreground;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+    }
+
+    // 禁用态用一个覆盖层压淡，比逐个改子元素颜色简单
+    Rectangle {
+        background: Palette.background;
+        opacity: enabled ? 0.0 : 0.55;
+        border-radius: parent.border-radius;
+        animate opacity { duration: 120ms; easing: ease-out; }
+    }
+
+    TouchArea {
+        mouse-cursor: pointer;
+        clicked => { if (root.enabled) { root.clicked(); } }
+    }
+}
+
+/// 文字按钮：用于「刷新」「新建」这类动作。
+/// 中文标签比找不到合适字形的符号可靠，也不用为了一个图标引入图标字体。
+component TextButton inherits Rectangle {
+    in property <string> label;
+    in property <bool> active: false;
+    in property <bool> hovered: false;
+
+    callback clicked();
+
+    // Slint 没有取字符串渲染宽度的 API（没有 measure），所以用固定宽度；
+    // 中文标签很短，固定宽度够用。
+    width: 88px;
+    height: 30px;
+    border-radius: 5px;
+    background: hovered ? Palette.alternate-background : (active ? Palette.selection-background : transparent);
+    animate background { duration: 90ms; easing: ease-out; }
+
     Text {
         text: label;
-        color: Palette.foreground;
-        opacity: enabled ? 1.0 : 0.35;
-        font-size: 14px;
+        color: active ? Palette.selection-foreground : Palette.foreground;
+        font-size: 12.5px;
         horizontal-alignment: center;
         vertical-alignment: center;
     }
 
     TouchArea {
-        clicked => { if (root.enabled) { root.clicked(); } }
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
     }
 }
 
 // ---------------------------------------------------------------------------
 // 主窗口
 // ---------------------------------------------------------------------------
-/// 表头单元格：所有列头共用，样式集中在一处。
-component HeaderCell inherits Text {
-    color: Palette.foreground;
-    opacity: 0.6;
-    font-size: 11px;
-    vertical-alignment: center;
-    overflow: elide;
-}
-
-/// 排序切换按钮：点一次切字段，再点同字段切升降序。
-/// 箭头方向由 `descending` 决定，激活态由 `active` 决定。
-component SortChip inherits Rectangle {
+/// 表头单元：列宽、对齐方式、可排序都在这里定义，
+/// 和 FileRow 里的同名列共用同一组宽度常量，避免两处各写一份而对不齐。
+component SortHeader inherits Rectangle {
     in property <string> label;
     in property <bool> active: false;
     in property <bool> descending: false;
+    in property <bool> right-aligned: false;
+    in property <length> cell-width: 110px;
     in property <bool> hovered: false;
 
     callback clicked();
 
-    width: 44px;
-    height: 20px;
+    // 列宽由调用方给死。表头与 FileRow 必须用同一组数值，
+    // 任何一边单独调宽都会错位，所以两处的宽度都写在这里的注释旁边。
+    width: cell-width;
+    height: 22px;
+    // 排序激活态**不用底色**表示：整块涂成选中色会让列头看起来像个按下的按钮，
+    // 也和真正被选中的行抢注意力。激活态只靠「文字变亮 + 出现方向箭头」表达。
     border-radius: 4px;
-    background: active ? Palette.selection-background
-                       : (hovered ? Palette.alternate-background : transparent);
+    background: hovered ? Palette.alternate-background : transparent;
     animate background { duration: 90ms; easing: ease-out; }
 
-    Text {
-        text: active ? (label + (descending ? "▾" : "▴")) : label;
-        color: active ? Palette.selection-foreground : Palette.foreground;
-        opacity: active ? 1.0 : 0.6;
-        font-size: 11px;
-        horizontal-alignment: center;
-        vertical-alignment: center;
+    HorizontalLayout {
+        // 排序方向三角：只在激活时存在，未激活就不占间距
+        spacing: 4px;
+        if active : AngleTri {
+            side: 7px;
+            tint: Palette.selection-foreground;
+            dir: descending ? 1 : 0;
+            opacity: 0.9;
+        }
+        Text {
+            text: label;
+            color: active ? Palette.selection-foreground : Palette.foreground;
+            opacity: active ? 1.0 : 0.6;
+            font-size: 11px;
+            vertical-alignment: center;
+            overflow: elide;
+            horizontal-alignment: right-aligned ? right : left;
+            horizontal-stretch: 1;
+            min-width: 0px;
+        }
     }
 
     TouchArea {
@@ -336,6 +433,12 @@ export component AppWindow inherits Window {
     in-out property <bool> sort-descending: false;
     in-out property <string> search-query: "";
     in-out property <string> rename-value: "";
+    // 编译期烘焙进来的风格名，由 Rust 侧启动时填入（状态栏显示用）。
+    in-out property <string> style-name: "";
+    // 列表为空时的提示文案，由 Rust 侧填入。
+    // 之前这里直接复用 status-text，结果「某目录无匹配项」时会把这句
+    // 状态栏文案同时画在列表中间，看起来像渲染残留。
+    in-out property <string> empty-message: "空目录";
 
     callback navigate(string);
     callback go-back();
@@ -366,28 +469,28 @@ export component AppWindow inherits Window {
             HorizontalLayout {
                 padding-left: 8px;
                 padding-right: 8px;
-                spacing: 2px;
+                spacing: 4px;
 
-                ToolButton { label: "←"; enabled: root.can-go-back; clicked => { root.go-back(); } }
-                ToolButton { label: "→"; enabled: root.can-go-forward; clicked => { root.go-forward(); } }
-                ToolButton { label: "↑"; enabled: root.can-go-up; clicked => { root.go-up(); } }
-                ToolButton { label: "⟳"; clicked => { root.refresh(); } }
+                GlyphButton { dir: 0; enabled: root.can-go-back; clicked => { root.go-back(); } }
+                GlyphButton { dir: 1; enabled: root.can-go-forward; clicked => { root.go-forward(); } }
+                GlyphButton { dir: 2; enabled: root.can-go-up; clicked => { root.go-up(); } }
+                TextButton { label: "刷新"; clicked => { root.refresh(); } }
 
-                Rectangle { width: 6px; background: transparent; }
+                Rectangle { width: 8px; background: transparent; }
 
-                // 地址栏：只读展示，点击行为留待以后做成可编辑面包屑
+                // 地址条：只读展示。
+                // 用 Palette.alternate-background 而不是描边 + 底色，视觉上更安静，
+                // 也避免描边在分数缩放下出现半个像素的模糊边。
                 Rectangle {
                     horizontal-stretch: 1;
                     height: 30px;
-                    border-radius: 5px;
+                    border-radius: 6px;
                     background: Palette.alternate-background;
-                    border-width: 1px;
-                    border-color: Palette.border;
 
                     HorizontalLayout {
                         padding-left: 10px;
                         padding-right: 10px;
-                        spacing: 6px;
+                        spacing: 8px;
                         FolderGlyph { tint: Palette.foreground; width: 15px; height: 15px; }
                         Text {
                             text: root.current-path;
@@ -401,11 +504,15 @@ export component AppWindow inherits Window {
                     }
                 }
 
-                ToolButton {
-                    label: root.show-hidden ? "◉" : "◎";
+                Rectangle { width: 4px; background: transparent; }
+
+                // 隐藏项开关：用文字标明状态，比 ◉/◎ 这种字符直观
+                TextButton {
+                    label: root.show-hidden ? "隐藏项：显示" : "隐藏项：过滤";
+                    active: root.show-hidden;
                     clicked => { root.toggle-hidden(); }
                 }
-                ToolButton { label: "+"; clicked => { root.create-folder(); } }
+                TextButton { label: "新建"; clicked => { root.create-folder(); } }
             }
         }
 
@@ -519,22 +626,34 @@ export component AppWindow inherits Window {
                     background: Palette.background;
 
                     HorizontalLayout {
-                        padding-left: 42px;   // 让开图标列
+                        padding-left: 52px;   // FileRow: 10 内边距 + 22 图标 + 10 间距 + 10 行内边距 = 52
                         padding-right: 10px;
                         spacing: 10px;
 
 
-                        HeaderCell { text: "名称"; horizontal-stretch: 1; min-width: 0px; }
-                        HeaderCell { text: "类型"; width: 110px; }
-                        HeaderCell { text: "大小"; width: 74px; horizontal-alignment: right; }
-                        HeaderCell { text: "修改时间"; width: 116px; horizontal-alignment: right; }
-
-                        // 排序切换：点一次切换字段，再点同字段切换升降序
-
-                        SortChip { label: "名称"; active: sort-mode == 0; descending: sort-descending; clicked => { root.set-sort(0, !(sort-mode == 0 && !sort-descending)); } }
-                        SortChip { label: "大小"; active: sort-mode == 1; descending: sort-descending; clicked => { root.set-sort(1, !(sort-mode == 1 && !sort-descending)); } }
-                        SortChip { label: "时间"; active: sort-mode == 2; descending: sort-descending; clicked => { root.set-sort(2, !(sort-mode == 2 && !sort-descending)); } }
-                        SortChip { label: "类型"; active: sort-mode == 3; descending: sort-descending; clicked => { root.set-sort(3, !(sort-mode == 3 && !sort-descending)); } }
+                        // 列头本身就是排序控件：点一下切字段，再点同字段切升降序。
+                        // 名称列用固定宽度，**不能**写成 parent.width - 常量：
+                        // 那会让列宽依赖自身所在的布局宽度，形成循环绑定，Slint 直接报 Recursion detected。
+                        SortHeader {
+                            label: "名称"; cell-width: 280px;
+                            active: sort-mode == 0; descending: sort-descending;
+                            clicked => { root.set-sort(0, !(sort-mode == 0 && !sort-descending)); }
+                        }
+                        SortHeader {
+                            label: "类型"; cell-width: 96px;
+                            active: sort-mode == 3; descending: sort-descending;
+                            clicked => { root.set-sort(3, !(sort-mode == 3 && !sort-descending)); }
+                        }
+                        SortHeader {
+                            label: "大小"; cell-width: 74px; right-aligned: true;
+                            active: sort-mode == 1; descending: sort-descending;
+                            clicked => { root.set-sort(1, !(sort-mode == 1 && !sort-descending)); }
+                        }
+                        SortHeader {
+                            label: "修改时间"; cell-width: 116px; right-aligned: true;
+                            active: sort-mode == 2; descending: sort-descending;
+                            clicked => { root.set-sort(2, !(sort-mode == 2 && !sort-descending)); }
+                        }
                     }
                 }
 
@@ -545,13 +664,16 @@ export component AppWindow inherits Window {
                     vertical-stretch: 1;
                     background: Palette.background;
 
-                    if root.files.length == 0 : Text {
-                        text: root.status-text == "" ? "空目录" : root.status-text;
-                        color: Palette.foreground;
-                        opacity: 0.5;
-                        font-size: 13px;
-                        horizontal-alignment: center;
-                        vertical-alignment: center;
+                    if root.files.length == 0 : VerticalLayout {
+                        alignment: center;
+                        spacing: 4px;
+                        Text {
+                            text: root.empty-message;
+                            color: Palette.foreground;
+                            opacity: 0.5;
+                            font-size: 13px;
+                            horizontal-alignment: center;
+                        }
                     }
 
                     ListView {
@@ -561,6 +683,9 @@ export component AppWindow inherits Window {
                         for item[index] in root.files : FileRow {
                             item: item;
                             selected: index == root.selected-index;
+                            // 斑马纹的奇偶由 Rust 侧在构造条目时算好，
+                            // Slint 既没有 `%` 也没有 `&`，不适合在界面里推导。
+                            alt: item.alt;
                             clicked => { root.selected-index = index; }
                             activated => { root.selected-index = index; root.open-selected(); }
                         }
@@ -596,9 +721,7 @@ export component AppWindow inherits Window {
 
                 // 明确标出当前风格，避免"以为在测 Material 其实跑的是 Fluent"
                 Text {
-                    text: Palette.color-scheme == ColorScheme.dark
-                        ? "风格: " + BuiltinStyle.name + " · 深色"
-                        : "风格: " + BuiltinStyle.name + " · 浅色";
+                    text: Palette.color-scheme == ColorScheme.dark ? "风格: " + root.style-name + " · 深色" : "风格: " + root.style-name + " · 浅色";
                     color: Palette.foreground;
                     opacity: 0.45;
                     font-size: 11px;
@@ -607,9 +730,4 @@ export component AppWindow inherits Window {
             }
         }
     }
-}
-
-/// 只用于状态栏显示编译期烘焙进来的风格名与明暗。
-export global BuiltinStyle {
-    out property <string> name: "unknown";
 }

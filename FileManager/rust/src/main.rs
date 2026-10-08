@@ -48,8 +48,14 @@ fn sort_key_name(key: u8) -> Option<&'static str> {
     }
 }
 
+/// 编译期烘焙进来的风格名（由 build.rs 以环境变量传给 rustc）。
+const BUILTIN_STYLE: &str = env!("FILEMANAGER_STYLE");
+
 fn main() -> Result<(), slint::PlatformError> {
     let ui = AppWindow::new()?;
+
+    // 状态栏显示编译期烘焙的风格，避免「以为在测 Material 其实跑的是 Fluent」。
+    ui.set_style_name(slint::SharedString::from(BUILTIN_STYLE));
 
     let model = Rc::new(VecModel::<FileEntry>::default());
     ui.set_files(ModelRc::from(model.clone()));
@@ -271,12 +277,18 @@ impl State {
         let mut rows = self.all.clone();
         fm::sort_entries(&mut rows, sort_key_name(self.sort_key), self.sort_desc);
 
+        // 斑马纹按「过滤后的行号」算，这样筛选时条纹依然稳。
         let visible: Vec<FileEntry> = rows
             .iter()
             .filter(|(path, _)| {
                 self.query.is_empty() || fm::base_name(path).to_lowercase().contains(&self.query)
             })
-            .map(|(path, meta)| entry_of(path, meta))
+            .enumerate()
+            .map(|(index, (path, meta))| {
+                let mut entry = entry_of(path, meta);
+                entry.alt = index % 2 == 1;
+                entry
+            })
             .collect();
 
         let total = visible.len();
@@ -302,6 +314,18 @@ impl State {
         self.ui.set_status_text(slint::SharedString::from(format!(
             "{total} 项{scope} · {hidden_note}"
         )));
+
+        // 列表区的空提示与状态栏分开：过滤无匹配、目录真为空、隐藏项被滤掉
+        // 是三种不同情况，同一句话在两个位置重复出现会让人以为是渲染残留。
+        self.ui.set_empty_message(slint::SharedString::from(if total > 0 {
+            String::new()
+        } else if !self.query.is_empty() {
+            format!("没有匹配「{}」的条目", self.query)
+        } else if self.ui.get_show_hidden() {
+            "这个目录是空的".to_string()
+        } else {
+            "这个目录是空的（可能还有隐藏项，用工具栏的「隐藏项」开关查看）".to_string()
+        }));
     }
 
     /// 选中项绝对路径（用**当前路径 + 名称**拼，不依赖展示模型里的 path 字段，
@@ -456,7 +480,7 @@ fn entry_of(path: &Path, meta: &fs::Metadata) -> FileEntry {
         modified_text: slint::SharedString::from(fm::format_modified(meta)),
         icon_kind,
         type_text: slint::SharedString::from(type_text),
-        hidden: fm::base_name(path).starts_with('.'),
+        alt: false,   // 由 refresh_model 按行号覆盖
     }
 }
 

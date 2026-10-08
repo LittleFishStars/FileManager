@@ -10,6 +10,11 @@ fn main() {
     let style = std::env::var("SLINT_STYLE").unwrap_or_else(|_| "fluent".to_string());
     println!("cargo:warning=SLINT_STYLE = {style}");
 
+    // 把风格名传给主程序：状态栏需要显示实际烘焙进去的风格，
+    // 否则界面上只能写死一个名字，或者干脆显示 unknown。
+    // 用 DEP_ 之外的自定义键，cargo 会直接传给本次编译的 rustc。
+    println!("cargo:rustc-env=FILEMANAGER_STYLE={style}");
+
     slint_build::compile_with_config(
         "ui/app.slint",
         slint_build::CompilerConfiguration::new().with_style(style),
