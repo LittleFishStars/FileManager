@@ -27,6 +27,34 @@ REPO = pathlib.Path(__file__).resolve().parent.parent          # FileManager/
 DEFAULT_BIN = REPO / "rust" / "target" / "release" / "filemanager"
 APP_ID = "filemanager"
 
+# 会被截图结果影响的源文件。用来判断要截的二进制是不是比源码旧。
+SOURCE_GLOBS = ("rust/src/*.rs", "rust/ui/*.slint", "rust/Cargo.toml", "rust/build.rs")
+
+
+def stale_binary(bin_path: pathlib.Path) -> str | None:
+    """二进制比源码旧时返回一句提示，否则 None。
+
+    为什么要检查：这个脚本默认截 release，而开发时常用的 `dev.sh build` 只构建 debug。
+    结果就是「改了代码、跑的是旧二进制」，量出来的数字**完全不随改动变化**——
+    看起来像「我的修改没生效」，实际上是在量一个几小时前的产物。
+    这种测量结果异常稳定本身就是最强信号，所以宁可在脚本里直接报警。
+    """
+    if not bin_path.exists():
+        return f"二进制不存在：{bin_path}（先跑 scripts/dev.sh release 或 build）"
+    bin_mtime = bin_path.stat().st_mtime
+    newer: list[str] = []
+    for pattern in SOURCE_GLOBS:
+        for path in REPO.glob(pattern):
+            if path.stat().st_mtime > bin_mtime:
+                newer.append(str(path.relative_to(REPO)))
+    if not newer:
+        return None
+    shown = ", ".join(sorted(newer)[:4])
+    more = "" if len(newer) <= 4 else f" 等 {len(newer)} 个"
+    return (f"注意：要截的二进制比这些源文件旧 -> {shown}{more}\n"
+            f"      你现在看到的可能是改动前的画面。先重新构建，"
+            f"或用 --bin 指向刚构建的 debug 产物。")
+
 
 def find_window_id(pid: int) -> int | None:
     """按 pid 找 niri 窗口 id；找不到再按 app_id 兜底。"""
@@ -61,6 +89,11 @@ def main() -> int:
                           capture_output=True).returncode != 0:
             print(f"缺少 {tool}", file=sys.stderr)
             return 2
+
+    # 先提示二进制是否过期：这是最容易导致「看起来没生效」的坑
+    stale = stale_binary(pathlib.Path(args.bin))
+    if stale:
+        print(f"[警告] {stale}", file=sys.stderr)
 
     # 清掉同名旧进程，避免截到上一个实例。
     # 用进程名精确匹配（pkill -x）而不是 pkill -f：后者会匹配到自己的命令行，
