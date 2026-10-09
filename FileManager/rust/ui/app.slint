@@ -58,19 +58,13 @@ component FileIcon inherits Rectangle {
     width: 22px;
     background: transparent;
 
-    // 关键：布局在交叉轴上会把子元素拉伸到整行高（36px），
-    // 光给 Image 设 height: 22px 没用——图标会贴在行顶部。
-    // 放进一个 alignment:center 的 VerticalLayout 才会真正垂直居中。
-    VerticalLayout {
-        alignment: center;
-        Image {
-            source: root.source;
-            width: 22px;
-            height: 22px;
-            image-fit: contain;
-            // 单色图标（Tabler）按当前前景色重新上色；多色图标保持原样。
-            colorize: root.mono ? root.tint : transparent;
-        }
+    Image {
+        source: root.source;
+        width: 22px;
+        height: 22px;
+        image-fit: contain;
+        // 单色图标（Tabler）按当前前景色重新上色；多色图标保持原样。
+        colorize: root.mono ? root.tint : transparent;
     }
 }
 
@@ -98,6 +92,8 @@ component FileRow inherits Rectangle {
         padding-left: 12px;
         padding-right: 12px;
         spacing: 12px;
+        // 交叉轴居中：图标是固定 22px，行高 36px，不居中的话会贴在行顶部。
+        cross-axis-alignment: center;
 
         FileIcon {
             source: item.icon;
@@ -181,18 +177,15 @@ component SideItem inherits Rectangle {
     HorizontalLayout {
         padding-left: 12px;
         spacing: 9px;
+        cross-axis-alignment: center;
 
-        // 侧边栏也用 Tabler 的文件夹图标，和工具栏同一套视觉语言。
-        // 同样需要 alignment:center：否则 34px 的行里 18px 图标会贴在顶部。
-        VerticalLayout {
-            alignment: center;
-            Image {
-                source: @image-url("../icons/tabler/folder.svg");
-                colorize: current ? Palette.selection-foreground : Palette.foreground;
-                width: 18px;
-                height: 18px;
-                image-fit: contain;
-            }
+        // 侧边栏也用 Tabler 的文件夹图标，和工具栏同一套视觉语言
+        Image {
+            source: @image-url("../icons/tabler/folder.svg");
+            colorize: current ? Palette.selection-foreground : Palette.foreground;
+            width: 18px;
+            height: 18px;
+            image-fit: contain;
         }
         Text {
             text: label;
@@ -433,6 +426,8 @@ export component AppWindow inherits Window {
                         padding-left: 10px;
                         padding-right: 10px;
                         spacing: 8px;
+                        cross-axis-alignment: center;
+
                         Image {
                             source: @image-url("../icons/tabler/folder.svg");
                             colorize: Palette.foreground;
@@ -488,11 +483,15 @@ export component AppWindow inherits Window {
                     padding-bottom: 10px;
                     spacing: 2px;
 
-                    // 应用标识：九个点组成的矩阵，纯几何，不依赖图片或字体
+                    // 应用标识：九个点组成的矩阵，纯几何，不依赖图片或字体。
+                    // 垂直居中用布局的交叉轴对齐（`cross-axis-alignment`）：
+                    // 固定尺寸的子元素在交叉轴上有富余空间时会被居中。
                     HorizontalLayout {
                         height: 44px;
                         padding-left: 4px;
                         spacing: 12px;
+                        cross-axis-alignment: center;
+
                         Rectangle {
                             width: 26px;
                             height: 26px;
